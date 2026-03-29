@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: incidents-pg-mcp-server
+  namespace: observability
+  labels:
+    app: incidents-pg-mcp-server
+    component: mcp-server
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: incidents-pg-mcp-server

@@ -1,0 +1,48 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: incidents-pg-mcp-server
+  namespace: observability
+  labels:
+    app: incidents-pg-mcp-server
+    component: mcp-server
+spec:
+  podSelector:
+    matchLabels:
+      app: incidents-pg-mcp-server
+
+  policyTypes:
+  - Ingress
+  - Egress
+
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          access-incidents-pg-mcp: "true"
+    - namespaceSelector:
+        matchLabels:
+          name: copilot
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  egress:
+  # DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  # AWS RDS PostgreSQL (egress externo porta 5432)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 5432

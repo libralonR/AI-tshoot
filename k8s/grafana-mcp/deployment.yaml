@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana-mcp-server
+  namespace: observability
+  labels:
+    app: grafana-mcp-server
+    component: mcp-server
+    tier: backend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: grafana-mcp-server
+  template:
+    metadata:
+      labels:
+        app: grafana-mcp-server
+        component: mcp-server
+        tier: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: grafana-mcp-server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containers:
+      - name: grafana-mcp
+        image: your-registry/grafana-mcp-server:latest
+        imagePullPolicy: Always
+        
+        ports:
+        - name: stdio
+          containerPort: 8080
+          protocol: TCP
+        
+        env:
+        - name: GRAFANA_URL
+          valueFrom:
+            configMapKeyRef:
+              name: grafana-mcp-config
+              key: grafana-url
+        
+        - name: GRAFANA_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: grafana-mcp-secrets
+              key: grafana-token
+        
+        - name: GRAFANA_ORG_ID
+          valueFrom:
+            configMapKeyRef:
+              name: grafana-mcp-config
+              key: grafana-org-id
+              optional: true
+        
+        - name: GRAFANA_TIMEOUT_S
+          valueFrom:
+            configMapKeyRef:
+              name: grafana-mcp-config
+              key: grafana-timeout
+              optional: true
+        
+        - name: GRAFANA_INSECURE_SKIP_VERIFY
+          valueFrom:
+            configMapKeyRef:
+              name: grafana-mcp-config
+              key: grafana-insecure-skip-verify
+              optional: true
+        
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+        
+        livenessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import sys; sys.exit(0)"
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import sys; sys.exit(0)"
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - grafana-mcp-server
+              topologyKey: kubernetes.io/hostname
+      
+      tolerations:
+      - key: "observability"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"

@@ -1,0 +1,33 @@
+{
+  "name": "incident-orchestrator",
+  "description": "Orquestra troubleshooting correlacionando métricas/logs/traces/alertas/incidentes (read-only).",
+  "prompt": "file://../prompts/incident-orchestrator.md",
+  "includeMcpJson": true,
+  "tools": [
+    "read",
+    "write",
+    "@grafana",
+    "@vm",
+    "@splunk",
+    "@tempo",
+    "@servicenow",
+    "@athena"
+  ],
+  "allowedTools": [
+    "read",
+    "write",
+    "@grafana",
+    "@vm",
+    "@splunk",
+    "@tempo",
+    "@servicenow",
+    "@athena"
+  ],
+  "resources": [
+    "file://README.md",
+    "file://.kiro/steering/**/*.md",
+    "file://runbooks/**/*.md",
+    "file://docs/**/*.md"
+  ],
+  "model": "claude-sonnet-4"
+}

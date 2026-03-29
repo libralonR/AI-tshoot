@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-mcp-config
+  namespace: observability
+  labels:
+    app: grafana-mcp-server
+    component: mcp-server
+data:
+  # Grafana URL (internal cluster service or external)
+  grafana-url: "http://grafana.observability.svc.cluster.local:3000"
+  
+  # Optional: Grafana Org ID (default: 1)
+  grafana-org-id: "1"
+  
+  # Optional: Request timeout in seconds (default: 15)
+  grafana-timeout: "15"
+  
+  # Optional: Skip TLS verification (default: false)
+  # Use "true" only for development/testing
+  grafana-insecure-skip-verify: "false"

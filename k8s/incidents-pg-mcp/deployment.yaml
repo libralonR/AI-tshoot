@@ -1,0 +1,137 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incidents-pg-mcp-server
+  namespace: observability
+  labels:
+    app: incidents-pg-mcp-server
+    component: mcp-server
+    tier: backend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: incidents-pg-mcp-server
+  template:
+    metadata:
+      labels:
+        app: incidents-pg-mcp-server
+        component: mcp-server
+        tier: backend
+    spec:
+      serviceAccountName: incidents-pg-mcp-server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+      - name: incidents-pg-mcp
+        image: your-registry/incidents-pg-mcp-server:latest
+        imagePullPolicy: Always
+
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+
+        env:
+        - name: PG_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: incidents-pg-mcp-config
+              key: pg-host
+        - name: PG_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: incidents-pg-mcp-config
+              key: pg-port
+        - name: PG_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              name: incidents-pg-mcp-config
+              key: pg-database
+        - name: PG_SSLMODE
+          valueFrom:
+            configMapKeyRef:
+              name: incidents-pg-mcp-config
+              key: pg-sslmode
+        - name: PG_MIN_CONN
+          valueFrom:
+            configMapKeyRef:
+              name: incidents-pg-mcp-config
+              key: pg-min-conn
+        - name: PG_MAX_CONN
+          valueFrom:
+            configMapKeyRef:
+              name: incidents-pg-mcp-config
+              key: pg-max-conn
+        - name: PG_USER
+          valueFrom:
+            secretKeyRef:
+              name: incidents-pg-mcp-secrets
+              key: pg-user
+        - name: PG_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: incidents-pg-mcp-secrets
+              key: pg-password
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+
+        livenessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - incidents-pg-mcp-server
+              topologyKey: kubernetes.io/hostname
+
+      tolerations:
+      - key: "observability"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"

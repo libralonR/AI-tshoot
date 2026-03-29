@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.egg
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# VM MCP source (downloaded separately)
+k8s/vm-mcp/mcp-victoriametrics-source/
+
+# Build artifacts
+*.tar.gz
+dist/
+build/

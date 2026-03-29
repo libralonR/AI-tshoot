@@ -1,0 +1,6 @@
+Dockerfile
+Makefile
+*.yaml
+*.md
+.dockerignore
+mcp-victoriametrics-source/

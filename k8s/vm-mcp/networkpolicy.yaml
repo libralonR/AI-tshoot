@@ -1,0 +1,43 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vm-mcp-server
+  namespace: observability
+  labels:
+    app: vm-mcp-server
+    component: mcp-server
+spec:
+  podSelector:
+    matchLabels:
+      app: vm-mcp-server
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: copilot
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  # DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  # VictoriaMetrics
+  - to:
+    - podSelector:
+        matchLabels:
+          app: victoriametrics
+    ports:
+    - protocol: TCP
+      port: 8428

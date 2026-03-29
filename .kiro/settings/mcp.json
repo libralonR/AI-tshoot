@@ -1,0 +1,70 @@
+{
+  "mcpServers": {
+    "grafana": {
+      "command": "python",
+      "args": ["mcp-servers/grafana_v2.py"],
+      "env": {
+        "GRAFANA_URL": "http://127.0.0.1:3000/",
+        "GRAFANA_TOKEN": "${GRAFANA_TOKEN}",
+        "GRAFANA_ORG_ID": "1",
+        "GRAFANA_TIMEOUT_S": "15"
+      },
+      "disabled": false
+    },
+    "vm": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-e", "VM_INSTANCE_ENTRYPOINT",
+        "-e", "VM_INSTANCE_TYPE",
+        "-e", "VM_INSTANCE_BEARER_TOKEN",
+        "ghcr.io/victoriametrics/mcp-victoriametrics"
+      ],
+      "env": {
+        "VM_INSTANCE_ENTRYPOINT": "${VM_INSTANCE_ENTRYPOINT}",
+        "VM_INSTANCE_TYPE": "${VM_INSTANCE_TYPE}",
+        "VM_INSTANCE_BEARER_TOKEN": "${VM_INSTANCE_BEARER_TOKEN}"
+      },
+      "disabled": false
+    },
+    "splunk": {
+      "command": "python3",
+      "args": ["-m", "mcp_servers.splunk"],
+      "env": {
+        "SPLUNK_URL": "${SPLUNK_URL}",
+        "SPLUNK_TOKEN": "${SPLUNK_TOKEN}"
+      },
+      "disabled": true
+    },
+    "tempo": {
+      "command": "python",
+      "args": ["-m", "mcp_servers.tempo"],
+      "env": {
+        "TEMPO_URL": "${TEMPO_URL}"
+      },
+      "disabled": true
+    },
+    "incidents-pg": {
+      "command": "python",
+      "args": ["mcp-servers/incidents_pg.py"],
+      "env": {
+        "PG_HOST": "${PG_HOST}",
+        "PG_PORT": "${PG_PORT}",
+        "PG_DATABASE": "${PG_DATABASE}",
+        "PG_USER": "${PG_USER}",
+        "PG_PASSWORD": "${PG_PASSWORD}"
+      },
+      "disabled": false
+    },
+    "athena": {
+      "command": "python",
+      "args": ["-m", "mcp_servers.athena"],
+      "env": {
+        "AWS_REGION": "${AWS_REGION}",
+        "ATHENA_DB": "${ATHENA_DB}",
+        "ATHENA_OUTPUT": "${ATHENA_OUTPUT}"
+      },
+      "disabled": true
+    }
+  }
+}

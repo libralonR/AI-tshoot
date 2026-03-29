@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: incidents-pg-mcp-config
+  namespace: observability
+  labels:
+    app: incidents-pg-mcp-server
+    component: mcp-server
+data:
+  pg-host: "your-rds-instance.region.rds.amazonaws.com"
+  pg-port: "5432"
+  pg-database: "incidents"
+  pg-sslmode: "require"
+  pg-min-conn: "1"
+  pg-max-conn: "5"

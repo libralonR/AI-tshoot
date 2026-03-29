@@ -1,0 +1,16 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: orchestrator
+  namespace: copilot
+  labels:
+    app: orchestrator
+    component: orchestrator
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: orchestrator
+  
+  # Alternativa: usar maxUnavailable
+  # maxUnavailable: 1

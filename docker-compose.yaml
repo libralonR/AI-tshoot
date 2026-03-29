@@ -1,0 +1,107 @@
+version: "3.9"
+
+# Docker Compose para teste local dos MCP servers + Orchestrator
+# Uso: cp .env.example .env && editar .env && docker compose up -d
+
+services:
+
+  # ============================================================
+  # Grafana MCP Server
+  # ============================================================
+  grafana-mcp:
+    build:
+      context: ./k8s/grafana-mcp
+      dockerfile: Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    image: grafana-mcp-server:v1.0.0
+    ports:
+      - "8081:8080"
+    environment:
+      - GRAFANA_URL=${GRAFANA_URL:-http://host.docker.internal:3000}
+      - GRAFANA_TOKEN=${GRAFANA_TOKEN}
+      - GRAFANA_ORG_ID=${GRAFANA_ORG_ID:-1}
+      - GRAFANA_TIMEOUT_S=15
+      - GRAFANA_INSECURE_SKIP_VERIFY=false
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ============================================================
+  # Incidents PostgreSQL MCP Server
+  # ============================================================
+#  incidents-pg-mcp:
+#    build:
+#      context: ./k8s/incidents-pg-mcp
+#      dockerfile: Dockerfile
+#    image: incidents-pg-mcp-server:local
+#    ports:
+#      - "8082:8080"
+#    environment:
+#      - PG_HOST=${PG_HOST:-host.docker.internal}
+#      - PG_PORT=${PG_PORT:-5432}
+#      - PG_DATABASE=${PG_DATABASE:-incidents}
+#      - PG_USER=${PG_USER}
+#      - PG_PASSWORD=${PG_PASSWORD}
+#      - PG_SSLMODE=${PG_SSLMODE:-require}
+#      - PG_MIN_CONN=1
+#      - PG_MAX_CONN=3
+#    restart: unless-stopped
+#    healthcheck:
+#      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+#      interval: 30s
+#      timeout: 5s
+#      retries: 3
+
+  # ============================================================
+  # VictoriaMetrics MCP Server
+  # Pré-requisito: buildar a imagem antes (ver k8s/vm-mcp/Makefile)
+  # ============================================================
+  vm-mcp:
+    image: ${VM_MCP_IMAGE:-vm-mcp-server:local}
+    ports:
+      - "8083:8080"
+    environment:
+      - VM_INSTANCE_ENTRYPOINT=${VM_INSTANCE_ENTRYPOINT:-http://host.docker.internal:8428}
+      - VM_INSTANCE_TYPE=${VM_INSTANCE_TYPE:-single}
+      - VM_INSTANCE_BEARER_TOKEN=${VM_INSTANCE_BEARER_TOKEN:-}
+      - MCP_SERVER_MODE=http
+      - MCP_LISTEN_ADDR=:8080
+      - MCP_DISABLED_TOOLS=export,flags,metric_relabel_debug,downsampling_filters_debug,retention_filters_debug,test_rules
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health/liveness"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ============================================================
+  # Orchestrator
+  # ============================================================
+  orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    image: orchestrator:v1.0.0
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - GRAFANA_MCP_ENDPOINT=http://grafana-mcp:8080
+      - INCIDENTS_PG_MCP_ENDPOINT=http://incidents-pg-mcp:8080
+      - VM_MCP_ENDPOINT=http://vm-mcp:8080
+      - SPLUNK_MCP_ENDPOINT=http://localhost:9999
+      - TEMPO_MCP_ENDPOINT=http://localhost:9999
+      - ATHENA_MCP_ENDPOINT=http://localhost:9999
+    depends_on:
+      - grafana-mcp
+      - incidents-pg-mcp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

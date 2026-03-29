@@ -1,0 +1,63 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana-mcp-server
+  namespace: observability
+  labels:
+    app: grafana-mcp-server
+    component: mcp-server
+spec:
+  podSelector:
+    matchLabels:
+      app: grafana-mcp-server
+  
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress: Permitir tráfego de clientes autorizados
+  ingress:
+  - from:
+    # Permitir de pods no mesmo namespace com label específica
+    - podSelector:
+        matchLabels:
+          access-grafana-mcp: "true"
+    # Permitir de namespace específico (ex: onde roda o Kiro/copilot)
+    - namespaceSelector:
+        matchLabels:
+          name: copilot
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # Egress: Permitir apenas para Grafana e DNS
+  egress:
+  # DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  
+  # Grafana service (ajuste conforme sua configuração)
+  - to:
+    - podSelector:
+        matchLabels:
+          app: grafana
+    ports:
+    - protocol: TCP
+      port: 3000
+  
+  # Se Grafana estiver fora do cluster, permitir egress externo
+  # - to:
+  #   - namespaceSelector: {}
+  #   ports:
+  #   - protocol: TCP
+  #     port: 443
+  #   - protocol: TCP
+  #     port: 80

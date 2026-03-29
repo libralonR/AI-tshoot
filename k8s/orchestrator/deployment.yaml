@@ -1,0 +1,170 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: copilot
+  labels:
+    app: orchestrator
+    component: orchestrator
+    tier: backend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+        component: orchestrator
+        tier: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: orchestrator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containers:
+      - name: orchestrator
+        image: your-registry/orchestrator:latest
+        imagePullPolicy: Always
+        
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        
+        env:
+        # MCP Server endpoints
+        - name: GRAFANA_MCP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: orchestrator-config
+              key: grafana-mcp-endpoint
+        
+        - name: VM_MCP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: orchestrator-config
+              key: vm-mcp-endpoint
+        
+        - name: SPLUNK_MCP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: orchestrator-config
+              key: splunk-mcp-endpoint
+        
+        - name: TEMPO_MCP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: orchestrator-config
+              key: tempo-mcp-endpoint
+        
+        - name: INCIDENTS_PG_MCP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: orchestrator-config
+              key: incidents-pg-mcp-endpoint
+        
+        - name: ATHENA_MCP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: orchestrator-config
+              key: athena-mcp-endpoint
+        
+        # Server configuration
+        - name: PORT
+          value: "8080"
+        
+        # Optional: LLM API keys (for future use)
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: orchestrator-secrets
+              key: openai-api-key
+              optional: true
+        
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: orchestrator-secrets
+              key: anthropic-api-key
+              optional: true
+        
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /app/.cache
+      
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - orchestrator
+              topologyKey: kubernetes.io/hostname
+      
+      tolerations:
+      - key: "copilot"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"

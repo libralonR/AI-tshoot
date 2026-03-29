@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: copilot
+
+resources:
+- serviceaccount.yaml
+- configmap.yaml
+- secret.yaml
+- deployment.yaml
+- service.yaml
+- networkpolicy.yaml
+- hpa.yaml
+- pdb.yaml
+- ingress.yaml
+
+commonLabels:
+  app.kubernetes.io/name: orchestrator
+  app.kubernetes.io/component: orchestrator
+  app.kubernetes.io/part-of: observability-copilot
+
+images:
+- name: your-registry/orchestrator
+  newTag: latest
+
+configMapGenerator:
+- name: orchestrator-config
+  behavior: merge
+  literals:
+  - grafana-mcp-endpoint=http://grafana-mcp-server.observability.svc.cluster.local:8080
+  - vm-mcp-endpoint=http://victoriametrics-mcp-server.observability.svc.cluster.local:8080
+  - splunk-mcp-endpoint=http://splunk-mcp-server.observability.svc.cluster.local:8080
+  - tempo-mcp-endpoint=http://tempo-mcp-server.observability.svc.cluster.local:8080
+  - servicenow-mcp-endpoint=http://servicenow-mcp-server.observability.svc.cluster.local:8080
+  - athena-mcp-endpoint=http://athena-mcp-server.observability.svc.cluster.local:8080

@@ -1,0 +1,76 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orchestrator
+  namespace: copilot
+  labels:
+    app: orchestrator
+    component: orchestrator
+spec:
+  podSelector:
+    matchLabels:
+      app: orchestrator
+  
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress: Permitir tráfego de clientes autorizados
+  ingress:
+  # Permitir de ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # Permitir de pods no mesmo namespace (para testes internos)
+  - from:
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # Egress: Permitir apenas para MCP servers, LLM APIs e DNS
+  egress:
+  # DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  
+  # MCP Servers (observability namespace)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: observability
+    - podSelector:
+        matchLabels:
+          component: mcp-server
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # LLM APIs (OpenAI, Anthropic) - external HTTPS
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # PostgreSQL (se usar para CaseFile storage)
+  - to:
+    - podSelector:
+        matchLabels:
+          app: postgres
+    ports:
+    - protocol: TCP
+      port: 5432
