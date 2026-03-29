@@ -24,6 +24,7 @@
 │   └── incidents-agent-prompt.md
 ├── specs/
 │   └── design-summary.md
+├── llm_client.py            # LLM client (OpenAI GPT-4o, function calling)
 ├── requirements.txt
 └── Dockerfile
 ```
@@ -37,15 +38,17 @@ orchestrator.py
   ├── correlation.py (CorrelationEngine)
   ├── hypothesis.py (HypothesisGenerator)
   ├── guardrails.py (Guardrails)
+  ├── llm_client.py (LLMClient) — usado pelo /chat
   └── agents/ (GrafanaAgent, IncidentsAgent)
         └── mcp_client.py (MCPClient)
 ```
 
 ## Endpoints FastAPI
 
-| Endpoint              | Método | Descrição                        |
-|-----------------------|--------|----------------------------------|
-| `/health`             | GET    | Health check                     |
-| `/steering`           | GET    | Steering files carregados        |
-| `/investigate`        | POST   | Inicia investigação (CaseFile)   |
-| `/casefile/{id}`      | GET    | Busca CaseFile (TODO: storage)   |
+| Endpoint              | Método | Descrição                                    |
+|-----------------------|--------|----------------------------------------------|
+| `/health`             | GET    | Health check                                 |
+| `/steering`           | GET    | Steering files carregados                    |
+| `/investigate`        | POST   | Investigação determinística (CaseFile)       |
+| `/chat`               | POST   | Investigação conversacional (LLM + tools)    |
+| `/casefile/{id}`      | GET    | Busca CaseFile (TODO: storage)               |
