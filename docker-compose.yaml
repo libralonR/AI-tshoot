@@ -10,11 +10,9 @@ services:
   # ============================================================
   grafana-mcp:
     build:
-      context: ./k8s/grafana-mcp
-      dockerfile: Dockerfile
-      args:
-        - BUILDKIT_INLINE_CACHE=1
-    image: grafana-mcp-server:v1.0.0
+      context: .
+      dockerfile: k8s/grafana-mcp/Dockerfile
+    image: rlibralon/grafana-mcp-server:v1.0.0
     ports:
       - "8081:8080"
     environment:
@@ -23,9 +21,11 @@ services:
       - GRAFANA_ORG_ID=${GRAFANA_ORG_ID:-1}
       - GRAFANA_TIMEOUT_S=15
       - GRAFANA_INSECURE_SKIP_VERIFY=false
+      - MCP_SERVER_MODE=sse
+      - MCP_LISTEN_PORT=8080
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8080/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -60,31 +60,28 @@ services:
   # VictoriaMetrics MCP Server
   # Pré-requisito: buildar a imagem antes (ver k8s/vm-mcp/Makefile)
   # ============================================================
-  vm-mcp:
-    image: ${VM_MCP_IMAGE:-vm-mcp-server:local}
-    ports:
-      - "8083:8080"
-    environment:
-      - VM_INSTANCE_ENTRYPOINT=${VM_INSTANCE_ENTRYPOINT:-http://host.docker.internal:8428}
-      - VM_INSTANCE_TYPE=${VM_INSTANCE_TYPE:-single}
-      - VM_INSTANCE_BEARER_TOKEN=${VM_INSTANCE_BEARER_TOKEN:-}
-      - MCP_SERVER_MODE=http
-      - MCP_LISTEN_ADDR=:8080
-      - MCP_DISABLED_TOOLS=export,flags,metric_relabel_debug,downsampling_filters_debug,retention_filters_debug,test_rules
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health/liveness"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+#  vm-mcp:
+#    image: ${VM_MCP_IMAGE:-vm-mcp-server:local}
+#    ports:
+#      - "8083:8080"
+#    environment:
+#      - VM_INSTANCE_ENTRYPOINT=${VM_INSTANCE_ENTRYPOINT:-http://host.docker.internal:8428}
+#      - VM_INSTANCE_TYPE=${VM_INSTANCE_TYPE:-single}
+#      - VM_INSTANCE_BEARER_TOKEN=${VM_INSTANCE_BEARER_TOKEN:-}
+#      - MCP_SERVER_MODE=http
+#      - MCP_LISTEN_ADDR=:8080
+#      - MCP_DISABLED_TOOLS=export,flags,metric_relabel_debug,downsampling_filters_debug,retention_filters_debug,test_rules
+#    restart: unless-stopped
+#    healthcheck:
+#      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health/liveness"]
+#      interval: 30s
+#      timeout: 5s
+#      retries: 3
 
   # ============================================================
   # Orchestrator
   # ============================================================
   orchestrator:
-    build:
-      context: ./orchestrator
-      dockerfile: Dockerfile
     image: orchestrator:v1.0.0
     ports:
       - "8080:8080"
@@ -98,7 +95,7 @@ services:
       - ATHENA_MCP_ENDPOINT=http://localhost:9999
     depends_on:
       - grafana-mcp
-      - incidents-pg-mcp
+      #- incidents-pg-mcp
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8080/health')"]

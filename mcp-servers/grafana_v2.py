@@ -429,7 +429,8 @@ async def call_tool(name: str, arguments: dict) -> list[dict]:
         await client.close()
 
 
-async def main():
+async def main_stdio():
+    """Run in stdio mode (for Kiro local / CLI)."""
     async with stdio_server() as (read_stream, write_stream):
         await app.run(
             read_stream,
@@ -438,5 +439,61 @@ async def main():
         )
 
 
+def main_sse():
+    """Run in SSE mode with REST endpoints (for Docker / K8s)."""
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route, Mount
+    from mcp.server.sse import SseServerTransport
+    import uvicorn
+
+    sse = SseServerTransport("/messages/")
+
+    async def handle_sse(request):
+        async with sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            await app.run(
+                streams[0], streams[1], app.create_initialization_options()
+            )
+
+    async def handle_health(request):
+        return JSONResponse({"status": "ok"})
+
+    async def handle_tool_call(request: Request):
+        tool_name = request.path_params["tool_name"]
+        body = await request.json()
+        arguments = body.get("arguments", {})
+        try:
+            result = await call_tool(tool_name, arguments)
+            text = result[0]["text"] if result else "{}"
+            return JSONResponse(json.loads(text))
+        except Exception as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    async def handle_list_tools_endpoint(request):
+        tools = await list_tools()
+        return JSONResponse({"tools": tools})
+
+    starlette_app = Starlette(
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Mount("/messages/", app=sse.handle_post_message),
+            Route("/health", endpoint=handle_health),
+            Route("/tools", endpoint=handle_list_tools_endpoint),
+            Route("/tools/{tool_name}", endpoint=handle_tool_call, methods=["POST"]),
+        ]
+    )
+
+    port = int(os.getenv("MCP_LISTEN_PORT", "8080"))
+    log.info(f"Starting Grafana MCP Server in SSE mode on port {port}")
+    uvicorn.run(starlette_app, host="0.0.0.0", port=port, log_level="info")
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    mode = os.getenv("MCP_SERVER_MODE", "stdio").lower()
+    if mode == "sse":
+        main_sse()
+    else:
+        asyncio.run(main_stdio())

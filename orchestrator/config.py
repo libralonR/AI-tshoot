@@ -34,7 +34,7 @@ class Config:
             "victoriametrics": MCPServerConfig(
                 endpoint=os.getenv(
                     "VM_MCP_ENDPOINT",
-                    "http://victoriametrics-mcp-server.observability.svc.cluster.local:8080",
+                    "http://vm-mcp-server.observability.svc.cluster.local:8080",
                 ),
                 timeout=15,
             ),
