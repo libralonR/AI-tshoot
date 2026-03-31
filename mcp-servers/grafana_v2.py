@@ -46,6 +46,8 @@ class GrafanaConfig:
     def from_env() -> "GrafanaConfig":
         base_url = (os.getenv("GRAFANA_URL") or "").strip().rstrip("/")
         token = (os.getenv("GRAFANA_TOKEN") or "").strip()
+        log.info(f"Config: GRAFANA_URL={base_url}, token={'set' if token else 'MISSING'}, "
+                 f"ORG_ID={os.getenv('GRAFANA_ORG_ID')}, TIMEOUT={os.getenv('GRAFANA_TIMEOUT_S')}")
         if not base_url or not token:
             raise RuntimeError(
                 "Missing GRAFANA_URL or GRAFANA_TOKEN env vars"
@@ -77,7 +79,9 @@ class GrafanaClient:
         await self._client.aclose()
 
     async def get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        log.debug(f"GET {self._cfg.base_url}{path} params={params}")
         r = await self._client.get(path, params=params)
+        log.debug(f"Response: status={r.status_code} size={len(r.content)} bytes")
         r.raise_for_status()
         return r.json()
 
@@ -90,14 +94,18 @@ class GrafanaClient:
         dashboard_uid: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         params = {"active": "true", "silenced": "false", "inhibited": "false"}
+        log.info(f"Fetching firing alerts from Grafana API...")
         alerts = await self.get("/api/alertmanager/grafana/api/v2/alerts", params=params)
+        log.info(f"Grafana returned {len(alerts)} total firing alerts")
         
         if labels:
+            log.info(f"Filtering by labels: {labels}")
             filtered = []
             for alert in alerts:
                 alert_labels = alert.get("labels", {})
                 if all(alert_labels.get(k) == v for k, v in labels.items()):
                     filtered.append(alert)
+            log.info(f"After label filter: {len(filtered)} alerts (from {len(alerts)})")
             alerts = filtered
         
         if dashboard_uid:
@@ -301,11 +309,14 @@ async def call_tool(name: str, arguments: dict) -> list[dict]:
             if arguments.get("owner_squad"):
                 labels["owner_squad"] = arguments["owner_squad"]
             
+            log.info(f"find_firing_alerts: final labels={labels}, dashboardUID={dashboard_uid}")
+            
             alerts = await client.find_firing_alerts(
                 labels=labels if labels else None,
                 dashboard_uid=dashboard_uid,
             )
             execution_time = time.time() - start_time
+            log.info(f"find_firing_alerts: returned {len(alerts)} alerts in {execution_time:.2f}s")
             
             normalized_alerts = []
             for alert in alerts:
@@ -465,11 +476,15 @@ def main_sse():
         tool_name = request.path_params["tool_name"]
         body = await request.json()
         arguments = body.get("arguments", {})
+        log.info(f"REST /tools/{tool_name} called with: {arguments}")
         try:
             result = await call_tool(tool_name, arguments)
             text = result[0]["text"] if result else "{}"
-            return JSONResponse(json.loads(text))
+            parsed = json.loads(text)
+            log.info(f"REST /tools/{tool_name} success: {parsed.get('success', '?')}")
+            return JSONResponse(parsed)
         except Exception as e:
+            log.exception(f"REST /tools/{tool_name} error: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     async def handle_list_tools_endpoint(request):
@@ -493,6 +508,10 @@ def main_sse():
 
 if __name__ == "__main__":
     mode = os.getenv("MCP_SERVER_MODE", "stdio").lower()
+    log.info(f"Starting grafana_v2.py in mode={mode}")
+    log.info(f"ENV: GRAFANA_URL={os.getenv('GRAFANA_URL', 'NOT SET')}")
+    log.info(f"ENV: MCP_SERVER_MODE={os.getenv('MCP_SERVER_MODE', 'NOT SET')}")
+    log.info(f"ENV: MCP_LISTEN_PORT={os.getenv('MCP_LISTEN_PORT', 'NOT SET')}")
     if mode == "sse":
         main_sse()
     else:
