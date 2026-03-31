@@ -71,7 +71,7 @@ class GrafanaClient:
         self._client = httpx.AsyncClient(
             base_url=cfg.base_url,
             headers=headers,
-            verify=cfg.verify_tls,
+            verify=False,
             timeout=httpx.Timeout(cfg.timeout_s),
         )
 

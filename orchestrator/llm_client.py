@@ -222,7 +222,12 @@ class LLMClient:
         import httpx as _httpx
         http_client = _httpx.AsyncClient(verify=False)
 
-        self.client = AsyncOpenAI(api_key=api_key, http_client=http_client)
+        base_url = os.getenv("OPENAI_BASE_URL")
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=http_client,
+        )
         self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
         self.system_prompt = _load_system_prompt()
         self.mcp_tools = mcp_tools or {}

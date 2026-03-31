@@ -15,7 +15,7 @@ class MCPClient:
         self.server_name = server_name
         self.endpoint = endpoint
         self.timeout = timeout
-        self.client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
+        self.client = httpx.AsyncClient(timeout=httpx.Timeout(timeout), verify=False)
 
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         try:
