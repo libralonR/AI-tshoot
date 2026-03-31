@@ -218,7 +218,11 @@ class LLMClient:
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY env var not set")
 
-        self.client = AsyncOpenAI(api_key=api_key)
+        # Skip SSL verification if behind corporate proxy
+        import httpx as _httpx
+        http_client = _httpx.AsyncClient(verify=False)
+
+        self.client = AsyncOpenAI(api_key=api_key, http_client=http_client)
         self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
         self.system_prompt = _load_system_prompt()
         self.mcp_tools = mcp_tools or {}
