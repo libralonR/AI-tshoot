@@ -49,7 +49,9 @@ class PGConfig:
         database = os.getenv("PG_DATABASE", "incidents")
         user = os.getenv("PG_USER", "")
         password = os.getenv("PG_PASSWORD", "")
-        sslmode = os.getenv("PG_SSLMODE", "require")  # AWS RDS exige SSL
+        sslmode = os.getenv("PG_SSLMODE", "require")
+        log.info(f"Config: PG_HOST={host}, PG_PORT={port}, PG_DATABASE={database}, "
+                 f"PG_USER={'set' if user else 'MISSING'}, PG_SSLMODE={sslmode}")
         if not user or not password:
             raise RuntimeError("Missing PG_USER or PG_PASSWORD env vars")
         return PGConfig(
@@ -322,6 +324,7 @@ async def call_tool(name: str, arguments: dict) -> list[dict]:
 
 async def _get_incident(pool: AsyncConnectionPool, args: dict) -> dict:
     number = args["number"].strip().upper()
+    log.info(f"get_incident: fetching {number}")
     cols = ", ".join(f'i."{c}"' for c in INCIDENT_COLUMNS)
 
     async with pool.connection() as conn:
@@ -332,14 +335,20 @@ async def _get_incident(pool: AsyncConnectionPool, args: dict) -> dict:
         result = await row.fetchone()
 
     if not result:
+        log.warning(f"get_incident: {number} not found")
         return {"success": False, "error": f"Incident {number} not found"}
 
-    return {"success": True, "result": enrich_row(result)}
+    enriched = enrich_row(result)
+    labels_count = len(enriched.get("_grafana_labels", {}))
+    log.info(f"get_incident: found {number}, cmdb_ci_name={enriched.get('cmdb_ci_name')}, "
+             f"priority={enriched.get('priority')}, grafana_labels={labels_count}")
+    return {"success": True, "result": enriched}
 
 
 async def _search_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
     conditions = []
     params: Dict[str, Any] = {}
+    log.info(f"search_incidents: filters={args}")
 
     if args.get("application_service"):
         conditions.append("i.cmdb_ci_name ILIKE %(app_svc)s")
@@ -383,9 +392,11 @@ async def _search_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
     """
 
     async with pool.connection() as conn:
+        log.debug(f"search_incidents: executing query with {len(conditions)} conditions, limit={limit}")
         cur = await conn.execute(query, params)
         rows = await cur.fetchall()
 
+    log.info(f"search_incidents: returned {len(rows)} incidents")
     return {
         "success": True,
         "result": [enrich_row(r) for r in rows],
@@ -395,6 +406,8 @@ async def _search_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
 
 async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
     time_window = int(args.get("time_window_hours", 24))
+    log.info(f"get_related_incidents: number={args.get('number')}, "
+             f"app_svc={args.get('application_service')}, window={time_window}h")
     cols = ", ".join(f'i."{c}"' for c in INCIDENT_COLUMNS)
     results = {"by_parent": [], "by_ci": []}
 
@@ -445,6 +458,8 @@ async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
             )
             results["by_ci"] = [enrich_row(r) for r in await cur.fetchall()]
 
+    log.info(f"get_related_incidents: found {len(results['by_parent'])} by parent, "
+             f"{len(results['by_ci'])} by CI")
     return {
         "success": True,
         "result": results,
@@ -455,6 +470,8 @@ async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
 async def _get_incident_stats(pool: AsyncConnectionPool, args: dict) -> dict:
     days = int(args.get("days", 30))
     group_by = args.get("group_by", "priority")
+    log.info(f"get_incident_stats: app_svc={args.get('application_service')}, "
+             f"days={days}, group_by={group_by}")
 
     if group_by not in ("priority", "category", "state", "assignment_group_name"):
         return {"success": False, "error": f"Invalid group_by: {group_by}"}
@@ -481,6 +498,7 @@ async def _get_incident_stats(pool: AsyncConnectionPool, args: dict) -> dict:
         rows = await cur.fetchall()
 
     total = sum(r["count"] for r in rows)
+    log.info(f"get_incident_stats: {len(rows)} groups, total={total}")
     return {
         "success": True,
         "result": [{"key": r["group_key"], "count": r["count"]} for r in rows],
@@ -526,11 +544,15 @@ def main_sse():
         tool_name = request.path_params["tool_name"]
         body = await request.json()
         arguments = body.get("arguments", {})
+        log.info(f"REST /tools/{tool_name} called with: {arguments}")
         try:
             result = await call_tool(tool_name, arguments)
             text = result[0]["text"] if result else "{}"
-            return JSONResponse(json.loads(text))
+            parsed = json.loads(text)
+            log.info(f"REST /tools/{tool_name} success={parsed.get('success')}")
+            return JSONResponse(parsed)
         except Exception as e:
+            log.exception(f"REST /tools/{tool_name} error: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     async def handle_list_tools_endpoint(request):
@@ -554,6 +576,10 @@ def main_sse():
 
 if __name__ == "__main__":
     mode = os.getenv("MCP_SERVER_MODE", "stdio").lower()
+    log.info(f"Starting incidents_pg.py in mode={mode}")
+    log.info(f"ENV: PG_HOST={os.getenv('PG_HOST', 'NOT SET')}")
+    log.info(f"ENV: PG_DATABASE={os.getenv('PG_DATABASE', 'NOT SET')}")
+    log.info(f"ENV: MCP_SERVER_MODE={os.getenv('MCP_SERVER_MODE', 'NOT SET')}")
     if mode == "sse":
         main_sse()
     else:
