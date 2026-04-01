@@ -14,3 +14,4 @@ data:
   tempo-mcp-endpoint: "http://tempo-mcp-server.observability.svc.cluster.local:8080"
   incidents-pg-mcp-endpoint: "http://incidents-pg-mcp-server.observability.svc.cluster.local:8080"
   athena-mcp-endpoint: "http://athena-mcp-server.observability.svc.cluster.local:8080"
+  openai-model: "gpt-4o"

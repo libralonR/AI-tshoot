@@ -88,7 +88,7 @@ spec:
         - name: PORT
           value: "8080"
         
-        # Optional: LLM API keys (for future use)
+        # Optional: LLM API keys
         - name: OPENAI_API_KEY
           valueFrom:
             secretKeyRef:
@@ -96,11 +96,18 @@ spec:
               key: openai-api-key
               optional: true
         
-        - name: ANTHROPIC_API_KEY
+        - name: OPENAI_BASE_URL
           valueFrom:
             secretKeyRef:
               name: orchestrator-secrets
-              key: anthropic-api-key
+              key: openai-base-url
+              optional: true
+        
+        - name: OPENAI_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: orchestrator-config
+              key: openai-model
               optional: true
         
         resources:
