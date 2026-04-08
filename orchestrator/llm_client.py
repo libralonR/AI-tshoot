@@ -216,6 +216,7 @@ class LLMClient:
     def __init__(self, mcp_tools: Dict[str, Any] = None):
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
+            log.error("[LLMClient.__init__] OPENAI_API_KEY env var not set")
             raise RuntimeError("OPENAI_API_KEY env var not set")
 
         # Skip SSL verification if behind corporate proxy
@@ -232,6 +233,14 @@ class LLMClient:
         self.system_prompt = _load_system_prompt()
         self.mcp_tools = mcp_tools or {}
         self.conversation_history: List[Dict[str, Any]] = []
+        
+        log.info(
+            f"[LLMClient.__init__] Initialized | "
+            f"model={self.model} | "
+            f"base_url={base_url or 'default'} | "
+            f"system_prompt_length={len(self.system_prompt)} | "
+            f"available_tools={len(AVAILABLE_TOOLS)}"
+        )
 
     async def chat(
         self,
@@ -239,53 +248,36 @@ class LLMClient:
         tool_executor: Any = None,
     ) -> str:
         """Send a message and get a response, with automatic tool calling."""
+        import time
+        
+        log.info(
+            f"[LLMClient.chat] Starting chat | "
+            f"user_message_length={len(user_message)} | "
+            f"conversation_history_length={len(self.conversation_history)} | "
+            f"tool_executor={'configured' if tool_executor else 'not_configured'}"
+        )
 
         # Add system prompt on first message
         if not self.conversation_history:
             self.conversation_history.append(
                 {"role": "system", "content": self.system_prompt}
             )
+            log.debug(f"[LLMClient.chat] Added system prompt to conversation")
 
         # Add user message
         self.conversation_history.append({"role": "user", "content": user_message})
+        log.debug(f"[LLMClient.chat] Added user message to conversation")
 
         # Call LLM with tools
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=self.conversation_history,
-            tools=AVAILABLE_TOOLS,
-            tool_choice="auto",
-            temperature=0.1,
+        log.info(
+            f"[LLMClient.chat] Calling OpenAI API | "
+            f"model={self.model} | "
+            f"messages_count={len(self.conversation_history)} | "
+            f"tools_count={len(AVAILABLE_TOOLS)}"
         )
-
-        message = response.choices[0].message
-
-        # Handle tool calls (function calling)
-        while message.tool_calls:
-            self.conversation_history.append(message.model_dump())
-
-            for tool_call in message.tool_calls:
-                fn_name = tool_call.function.name
-                fn_args = json.loads(tool_call.function.arguments)
-
-                log.info(f"LLM calling tool: {fn_name}({fn_args})")
-
-                # Execute tool via MCP
-                if tool_executor:
-                    tool_result = await tool_executor(fn_name, fn_args)
-                else:
-                    tool_result = {"error": "No tool executor configured"}
-
-                # Add tool result to conversation
-                self.conversation_history.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(tool_result, default=str),
-                    }
-                )
-
-            # Call LLM again with tool results
+        
+        try:
+            start_time = time.time()
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=self.conversation_history,
@@ -293,12 +285,133 @@ class LLMClient:
                 tool_choice="auto",
                 temperature=0.1,
             )
+            api_time = time.time() - start_time
+            
+            log.info(
+                f"[LLMClient.chat] OpenAI API response received | "
+                f"api_time={api_time:.3f}s | "
+                f"finish_reason={response.choices[0].finish_reason} | "
+                f"usage={response.usage.model_dump() if response.usage else 'N/A'}"
+            )
+        except Exception as e:
+            log.error(
+                f"[LLMClient.chat] OpenAI API call failed | "
+                f"error_type={type(e).__name__} | "
+                f"error={str(e)[:200]}"
+            )
+            raise
+
+        message = response.choices[0].message
+        tool_call_iteration = 0
+
+        # Handle tool calls (function calling)
+        while message.tool_calls:
+            tool_call_iteration += 1
+            log.info(
+                f"[LLMClient.chat] Processing tool calls | "
+                f"iteration={tool_call_iteration} | "
+                f"tool_calls_count={len(message.tool_calls)}"
+            )
+            
+            self.conversation_history.append(message.model_dump())
+
+            for idx, tool_call in enumerate(message.tool_calls, 1):
+                fn_name = tool_call.function.name
+                fn_args = json.loads(tool_call.function.arguments)
+
+                log.info(
+                    f"[LLMClient.chat] Executing tool call {idx}/{len(message.tool_calls)} | "
+                    f"tool={fn_name} | "
+                    f"args={fn_args} | "
+                    f"tool_call_id={tool_call.id}"
+                )
+
+                # Execute tool via MCP
+                tool_start = time.time()
+                if tool_executor:
+                    try:
+                        tool_result = await tool_executor(fn_name, fn_args)
+                        tool_time = time.time() - tool_start
+                        log.info(
+                            f"[LLMClient.chat] Tool execution completed | "
+                            f"tool={fn_name} | "
+                            f"execution_time={tool_time:.3f}s | "
+                            f"result_size={len(json.dumps(tool_result, default=str))} bytes"
+                        )
+                    except Exception as e:
+                        tool_time = time.time() - tool_start
+                        log.error(
+                            f"[LLMClient.chat] Tool execution failed | "
+                            f"tool={fn_name} | "
+                            f"execution_time={tool_time:.3f}s | "
+                            f"error_type={type(e).__name__} | "
+                            f"error={str(e)[:200]}"
+                        )
+                        tool_result = {"error": f"Tool execution failed: {str(e)}"}
+                else:
+                    tool_result = {"error": "No tool executor configured"}
+                    log.warning(f"[LLMClient.chat] No tool executor configured for {fn_name}")
+
+                # Add tool result to conversation
+                tool_result_str = json.dumps(tool_result, default=str)
+                self.conversation_history.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": tool_result_str,
+                    }
+                )
+                log.debug(
+                    f"[LLMClient.chat] Added tool result to conversation | "
+                    f"tool={fn_name} | "
+                    f"result_length={len(tool_result_str)}"
+                )
+
+            # Call LLM again with tool results
+            log.info(
+                f"[LLMClient.chat] Calling OpenAI API with tool results | "
+                f"iteration={tool_call_iteration} | "
+                f"messages_count={len(self.conversation_history)}"
+            )
+            
+            try:
+                start_time = time.time()
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=self.conversation_history,
+                    tools=AVAILABLE_TOOLS,
+                    tool_choice="auto",
+                    temperature=0.1,
+                )
+                api_time = time.time() - start_time
+                
+                log.info(
+                    f"[LLMClient.chat] OpenAI API response received (iteration {tool_call_iteration}) | "
+                    f"api_time={api_time:.3f}s | "
+                    f"finish_reason={response.choices[0].finish_reason} | "
+                    f"usage={response.usage.model_dump() if response.usage else 'N/A'}"
+                )
+            except Exception as e:
+                log.error(
+                    f"[LLMClient.chat] OpenAI API call failed (iteration {tool_call_iteration}) | "
+                    f"error_type={type(e).__name__} | "
+                    f"error={str(e)[:200]}"
+                )
+                raise
+                
             message = response.choices[0].message
 
         # Final text response
         assistant_message = message.content or ""
         self.conversation_history.append(
             {"role": "assistant", "content": assistant_message}
+        )
+        
+        log.info(
+            f"[LLMClient.chat] Chat completed | "
+            f"response_length={len(assistant_message)} | "
+            f"total_tool_iterations={tool_call_iteration} | "
+            f"final_conversation_length={len(self.conversation_history)}"
         )
 
         return assistant_message

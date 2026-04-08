@@ -66,27 +66,57 @@ class Orchestrator:
 
     async def investigate(self, input_data: Input, filters: dict = None) -> CaseFile:
         start_time = time.time()
+        
+        log.info(
+            f"[investigate] Starting investigation | "
+            f"type={input_data.type} | "
+            f"value={input_data.value[:50]}... | "
+            f"user={input_data.user} | "
+            f"filters={filters}"
+        )
 
         if not self._validate_input(input_data):
+            log.error(f"[investigate] Invalid input: type={input_data.type}, value={input_data.value}")
             raise ValueError(f"Invalid input: {input_data}")
 
         case_file = self._create_case_file(input_data)
+        log.debug(f"[investigate] Created case_file: {case_file.id}")
+        
+        log.info(f"[investigate] Determining scope and time window...")
         await self._determine_scope_and_time_window(case_file, filters)
+        log.info(
+            f"[investigate] Scope determined | "
+            f"serviceName={case_file.scope.serviceName} | "
+            f"environment={case_file.scope.environment} | "
+            f"additionalLabels={list((case_file.scope.additionalLabels or {}).keys())}"
+        )
 
+        log.info(f"[investigate] Gathering signals from MCP servers...")
         evidence_list = await self._gather_signals(case_file)
+        log.info(f"[investigate] Gathered {len(evidence_list)} evidence items")
 
+        log.info(f"[investigate] Correlating signals...")
         correlated_evidence, gaps = self.correlation_engine.correlate_signals(
             evidence_list, case_file.scope
         )
         case_file.evidence = correlated_evidence
         case_file.correlationGaps = gaps
+        log.info(
+            f"[investigate] Correlation complete | "
+            f"evidence={len(correlated_evidence)} | "
+            f"gaps={len(gaps)}"
+        )
 
+        log.info(f"[investigate] Generating hypotheses...")
         case_file.hypotheses = self.hypothesis_generator.generate_hypotheses(
             correlated_evidence, case_file.scope
         )
+        log.info(f"[investigate] Generated {len(case_file.hypotheses)} hypotheses")
 
+        log.info(f"[investigate] Applying guardrails...")
         self._apply_guardrails(case_file)
 
+        execution_time = time.time() - start_time
         case_file.auditTrail.append(
             AuditEntry(
                 timestamp=datetime.utcnow().isoformat(),
@@ -94,11 +124,20 @@ class Orchestrator:
                 details={
                     "evidence_count": len(case_file.evidence),
                     "hypotheses_count": len(case_file.hypotheses),
-                    "execution_time": time.time() - start_time,
+                    "execution_time": execution_time,
                 },
             )
         )
         case_file.updatedAt = datetime.utcnow().isoformat()
+        
+        log.info(
+            f"[investigate] Investigation completed | "
+            f"case_file_id={case_file.id} | "
+            f"execution_time={execution_time:.3f}s | "
+            f"evidence={len(case_file.evidence)} | "
+            f"hypotheses={len(case_file.hypotheses)}"
+        )
+        
         return case_file
 
     # ------------------------------------------------------------------
@@ -142,34 +181,45 @@ class Orchestrator:
     async def _determine_scope_and_time_window(self, case_file: CaseFile, filters: dict = None):
         input_data = case_file.input
         filters = filters or {}
+        
+        log.debug(f"[_determine_scope_and_time_window] input_type={input_data.type}, filters={filters}")
 
         if input_data.type == InputType.ALERT_UID:
+            log.info(f"[_determine_scope_and_time_window] Fetching alert details for UID: {input_data.value}")
             mcp_client = MCPClient("grafana", config.mcp_servers["grafana"].endpoint)
             agent = GrafanaAgent(mcp_client)
-            evidence = await agent.fetch_alert_details(input_data.value)
-            if evidence:
-                alert_labels = evidence.result.get("labels", {})
-                case_file.scope = Scope(
-                    serviceName=alert_labels.get("application_service"),
-                    environment=alert_labels.get("env"),
-                    cluster=alert_labels.get("cluster"),
-                    namespace=alert_labels.get("namespace"),
-                    additionalLabels={
-                        "alertname": alert_labels.get("alertname", ""),
-                        "owner_squad": alert_labels.get("owner_squad", ""),
-                        "owner_sre": alert_labels.get("owner_sre", ""),
-                        "severidade": alert_labels.get("Severidade", ""),
-                        "business_service": alert_labels.get("business_service", ""),
-                        "business_domain": alert_labels.get("business_domain", ""),
-                        "business_capability": alert_labels.get("business_capability", ""),
-                        "grafana_folder": alert_labels.get("grafana_folder", ""),
-                        "datasource": alert_labels.get("Datasource", ""),
-                    },
-                )
-                case_file.timeWindow = self._default_time_window()
-            await mcp_client.close()
+            
+            try:
+                evidence = await agent.fetch_alert_details(input_data.value)
+                if evidence:
+                    alert_labels = evidence.result.get("labels", {})
+                    log.debug(f"[_determine_scope_and_time_window] Alert labels: {list(alert_labels.keys())}")
+                    case_file.scope = Scope(
+                        serviceName=alert_labels.get("application_service"),
+                        environment=alert_labels.get("env"),
+                        cluster=alert_labels.get("cluster"),
+                        namespace=alert_labels.get("namespace"),
+                        additionalLabels={
+                            "alertname": alert_labels.get("alertname", ""),
+                            "owner_squad": alert_labels.get("owner_squad", ""),
+                            "owner_sre": alert_labels.get("owner_sre", ""),
+                            "severidade": alert_labels.get("Severidade", ""),
+                            "business_service": alert_labels.get("business_service", ""),
+                            "business_domain": alert_labels.get("business_domain", ""),
+                            "business_capability": alert_labels.get("business_capability", ""),
+                            "grafana_folder": alert_labels.get("grafana_folder", ""),
+                            "datasource": alert_labels.get("Datasource", ""),
+                        },
+                    )
+                    case_file.timeWindow = self._default_time_window()
+                    log.info(f"[_determine_scope_and_time_window] Scope from alert: serviceName={case_file.scope.serviceName}")
+                else:
+                    log.warning(f"[_determine_scope_and_time_window] No evidence returned for alert UID: {input_data.value}")
+            finally:
+                await mcp_client.close()
 
         elif input_data.type == InputType.SYMPTOM:
+            log.info(f"[_determine_scope_and_time_window] Processing SYMPTOM: {input_data.value[:100]}...")
             # Use explicit filters if provided, otherwise try keyword extraction
             service_name = filters.get("application_service")
             environment = filters.get("env") or filters.get("environment")
@@ -178,15 +228,19 @@ class Orchestrator:
                 symptom = input_data.value.lower()
                 if "api-gateway" in symptom or "api gateway" in symptom:
                     service_name = "api-gateway"
+                    log.debug(f"[_determine_scope_and_time_window] Extracted service from symptom: api-gateway")
                 elif "auth" in symptom:
                     service_name = "auth-service"
+                    log.debug(f"[_determine_scope_and_time_window] Extracted service from symptom: auth-service")
 
             if not environment:
                 symptom = input_data.value.lower()
                 if "production" in symptom or "prod" in symptom:
                     environment = "production"
+                    log.debug(f"[_determine_scope_and_time_window] Extracted environment from symptom: production")
                 elif "staging" in symptom:
                     environment = "staging"
+                    log.debug(f"[_determine_scope_and_time_window] Extracted environment from symptom: staging")
 
             case_file.scope = Scope(
                 serviceName=service_name,
@@ -197,27 +251,53 @@ class Orchestrator:
                 } or None,
             )
             case_file.timeWindow = self._default_time_window()
+            log.info(
+                f"[_determine_scope_and_time_window] Scope from symptom: "
+                f"serviceName={service_name}, environment={environment}, "
+                f"additionalLabels={list((case_file.scope.additionalLabels or {}).keys())}"
+            )
 
         else:  # INCIDENT_ID
+            log.info(f"[_determine_scope_and_time_window] Fetching incident: {input_data.value}")
             mcp_client = MCPClient("incidents-pg", config.mcp_servers["incidents-pg"].endpoint)
             agent = IncidentsAgent(mcp_client)
-            evidence = await agent.fetch_incident(input_data.value)
-            if evidence:
-                result = evidence.result
-                case_file.scope = Scope(
-                    serviceName=result.get("cmdb_ci_name"),
-                    additionalLabels={
-                        "incident_number": result.get("number", ""),
-                        "priority": result.get("priority", ""),
-                        "category": result.get("category", ""),
-                        "assignment_group": result.get("assignment_group_name", ""),
-                    },
-                )
-                case_file.evidence.append(evidence)
-            await mcp_client.close()
+            
+            try:
+                evidence = await agent.fetch_incident(input_data.value)
+                if evidence:
+                    result = evidence.result
+                    case_file.scope = Scope(
+                        serviceName=result.get("cmdb_ci_name"),
+                        additionalLabels={
+                            "incident_number": result.get("number", ""),
+                            "priority": result.get("priority", ""),
+                            "category": result.get("category", ""),
+                            "assignment_group": result.get("assignment_group_name", ""),
+                        },
+                    )
+                    case_file.evidence.append(evidence)
+                    log.info(
+                        f"[_determine_scope_and_time_window] Scope from incident: "
+                        f"serviceName={case_file.scope.serviceName}, "
+                        f"priority={result.get('priority')}"
+                    )
+                else:
+                    log.warning(f"[_determine_scope_and_time_window] No evidence returned for incident: {input_data.value}")
+            finally:
+                await mcp_client.close()
             case_file.timeWindow = self._default_time_window()
 
     async def _gather_signals(self, case_file: CaseFile) -> List[Evidence]:
+        import time
+        start_time = time.time()
+        
+        log.info(
+            f"[_gather_signals] Starting signal gathering | "
+            f"serviceName={case_file.scope.serviceName} | "
+            f"environment={case_file.scope.environment} | "
+            f"additionalLabels={list((case_file.scope.additionalLabels or {}).keys())}"
+        )
+        
         evidence_list: List[Evidence] = []
 
         grafana_client = MCPClient("grafana", config.mcp_servers["grafana"].endpoint)
@@ -226,30 +306,72 @@ class Orchestrator:
         incidents_agent = IncidentsAgent(incidents_client)
 
         try:
+            # Always fetch firing alerts
+            log.info(f"[_gather_signals] Fetching firing alerts from Grafana...")
             tasks = [grafana_agent.find_firing_alerts(case_file.scope)]
 
+            # Fetch incidents if we have correlation keys
             ci_name = case_file.scope.serviceName
             additional = case_file.scope.additionalLabels or {}
             inc_number = additional.get("incident_number")
+            
+            log.info(
+                f"[_gather_signals] Incident correlation keys | "
+                f"ci_name={ci_name} | "
+                f"inc_number={inc_number}"
+            )
+            
             if inc_number or ci_name:
+                log.info(
+                    f"[_gather_signals] Fetching related incidents | "
+                    f"number={inc_number} | "
+                    f"cmdb_ci_name={ci_name}"
+                )
                 tasks.append(
                     incidents_agent.find_related_incidents(
                         number=inc_number, cmdb_ci_name=ci_name
                     )
                 )
+            else:
+                log.warning(
+                    f"[_gather_signals] Skipping incident search - no correlation keys | "
+                    f"serviceName={ci_name} | "
+                    f"incident_number={inc_number}"
+                )
 
+            log.info(f"[_gather_signals] Executing {len(tasks)} parallel tasks...")
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
+            
+            for idx, result in enumerate(results, 1):
                 if isinstance(result, Exception):
-                    log.error(f"Error gathering signals: {result}")
+                    log.error(
+                        f"[_gather_signals] Task {idx}/{len(tasks)} failed | "
+                        f"error_type={type(result).__name__} | "
+                        f"error={str(result)[:200]}"
+                    )
                 elif isinstance(result, list):
+                    log.info(
+                        f"[_gather_signals] Task {idx}/{len(tasks)} returned list | "
+                        f"items={len(result)}"
+                    )
                     evidence_list.extend(result)
                 elif result is not None:
+                    log.info(f"[_gather_signals] Task {idx}/{len(tasks)} returned single evidence")
                     evidence_list.append(result)
+                else:
+                    log.warning(f"[_gather_signals] Task {idx}/{len(tasks)} returned None")
+                    
         finally:
             await grafana_client.close()
             await incidents_client.close()
 
+        execution_time = time.time() - start_time
+        log.info(
+            f"[_gather_signals] Signal gathering completed | "
+            f"evidence_count={len(evidence_list)} | "
+            f"execution_time={execution_time:.3f}s"
+        )
+        
         return evidence_list
 
     def _apply_guardrails(self, case_file: CaseFile):
@@ -333,21 +455,63 @@ _chat_sessions: Dict[str, Any] = {}
 
 async def _execute_tool(tool_name: str, arguments: dict) -> dict:
     """Execute a tool via MCP servers. Used by LLM function calling."""
+    import time
+    start_time = time.time()
+    
+    log.info(
+        f"[_execute_tool] Starting tool execution | "
+        f"tool={tool_name} | "
+        f"arguments={arguments}"
+    )
+    
     grafana_tools = {"find_firing_alerts", "get_alert_details", "find_dashboards", "get_panel_link"}
     incidents_tools = {"get_incident", "search_incidents", "get_related_incidents", "get_incident_stats"}
+    
     if tool_name in grafana_tools:
-        client = MCPClient("grafana", config.mcp_servers["grafana"].endpoint)
+        server_name = "grafana"
+        endpoint = config.mcp_servers["grafana"].endpoint
+        log.debug(f"[_execute_tool] Routing to Grafana MCP | endpoint={endpoint}")
+        client = MCPClient(server_name, endpoint)
     elif tool_name in incidents_tools:
-        client = MCPClient("incidents-pg", config.mcp_servers["incidents-pg"].endpoint)
+        server_name = "incidents-pg"
+        endpoint = config.mcp_servers["incidents-pg"].endpoint
+        log.debug(f"[_execute_tool] Routing to Incidents PG MCP | endpoint={endpoint}")
+        client = MCPClient(server_name, endpoint)
     else:
+        log.error(f"[_execute_tool] Unknown tool: {tool_name}")
         return {"error": f"Unknown tool: {tool_name}"}
 
     try:
+        log.info(f"[_execute_tool] Calling MCP server | server={server_name} | tool={tool_name}")
         result = await client.call_tool(tool_name, arguments)
+        
         # Apply PII redaction
         from guardrails import Guardrails
-        result_str, _ = Guardrails.redact_pii(json.dumps(result, default=str))
-        return json.loads(result_str)
+        result_str, redacted = Guardrails.redact_pii(json.dumps(result, default=str))
+        result = json.loads(result_str)
+        
+        execution_time = time.time() - start_time
+        log.info(
+            f"[_execute_tool] Tool execution completed | "
+            f"tool={tool_name} | "
+            f"server={server_name} | "
+            f"execution_time={execution_time:.3f}s | "
+            f"result_size={len(result_str)} bytes | "
+            f"pii_redacted={redacted}"
+        )
+        
+        return result
+    except Exception as e:
+        execution_time = time.time() - start_time
+        log.error(
+            f"[_execute_tool] Tool execution failed | "
+            f"tool={tool_name} | "
+            f"server={server_name} | "
+            f"execution_time={execution_time:.3f}s | "
+            f"error_type={type(e).__name__} | "
+            f"error={str(e)[:200]}"
+        )
+        return {"error": f"Tool execution failed: {str(e)}"}
     finally:
         await client.close()
 
@@ -355,30 +519,80 @@ async def _execute_tool(tool_name: str, arguments: dict) -> dict:
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     """Conversational endpoint powered by LLM with function calling."""
+    import time
+    start_time = time.time()
+    
+    log.info(
+        f"[chat_endpoint] Received chat request | "
+        f"message_length={len(request.message)} | "
+        f"session_id={request.session_id or 'new'}"
+    )
+    
     try:
         from llm_client import LLMClient
+        log.debug("[chat_endpoint] LLMClient imported successfully")
     except Exception as e:
+        log.error(
+            f"[chat_endpoint] Failed to import LLMClient | "
+            f"error_type={type(e).__name__} | "
+            f"error={str(e)}"
+        )
         raise HTTPException(
             status_code=503,
             detail=f"LLM not configured. Set OPENAI_API_KEY env var. Error: {e}",
         )
 
     session_id = request.session_id or str(uuid.uuid4())
+    log.debug(f"[chat_endpoint] Using session_id: {session_id}")
 
     # Get or create session
     if session_id not in _chat_sessions:
-        _chat_sessions[session_id] = LLMClient()
+        log.info(f"[chat_endpoint] Creating new LLM session | session_id={session_id}")
+        try:
+            _chat_sessions[session_id] = LLMClient()
+            log.info(f"[chat_endpoint] LLM session created | session_id={session_id}")
+        except Exception as e:
+            log.error(
+                f"[chat_endpoint] Failed to create LLM session | "
+                f"session_id={session_id} | "
+                f"error_type={type(e).__name__} | "
+                f"error={str(e)}"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"Failed to initialize LLM client: {str(e)}",
+            )
+    else:
+        log.debug(f"[chat_endpoint] Reusing existing LLM session | session_id={session_id}")
 
     llm = _chat_sessions[session_id]
 
     try:
+        log.info(f"[chat_endpoint] Starting LLM chat | session_id={session_id}")
         response_text = await llm.chat(
             user_message=request.message,
             tool_executor=_execute_tool,
         )
+        
+        execution_time = time.time() - start_time
+        log.info(
+            f"[chat_endpoint] Chat completed successfully | "
+            f"session_id={session_id} | "
+            f"execution_time={execution_time:.3f}s | "
+            f"response_length={len(response_text)}"
+        )
+        
         return ChatResponse(response=response_text, session_id=session_id)
     except Exception as e:
-        log.exception("Error in chat")
+        execution_time = time.time() - start_time
+        log.error(
+            f"[chat_endpoint] Chat failed | "
+            f"session_id={session_id} | "
+            f"execution_time={execution_time:.3f}s | "
+            f"error_type={type(e).__name__} | "
+            f"error={str(e)[:500]}"
+        )
+        log.exception("[chat_endpoint] Full exception details:")
         raise HTTPException(status_code=500, detail=str(e))
 
 
