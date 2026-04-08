@@ -324,61 +324,87 @@ async def call_tool(name: str, arguments: dict) -> list[dict]:
 
 async def _get_incident(pool: AsyncConnectionPool, args: dict) -> dict:
     number = args["number"].strip().upper()
-    log.info(f"get_incident: fetching {number}")
+    log.info(f"[get_incident] Starting fetch for incident: {number}")
     cols = ", ".join(f'i."{c}"' for c in INCIDENT_COLUMNS)
 
-    async with pool.connection() as conn:
-        row = await conn.execute(
-            f"SELECT {cols} FROM public.incidents_snow i WHERE i.number = %(number)s",
-            {"number": number},
+    try:
+        async with pool.connection() as conn:
+            log.debug(f"[get_incident] Executing query for {number}")
+            row = await conn.execute(
+                f"SELECT {cols} FROM public.incidents_snow i WHERE i.number = %(number)s",
+                {"number": number},
+            )
+            result = await row.fetchone()
+            log.debug(f"[get_incident] Query completed, result={'found' if result else 'not found'}")
+
+        if not result:
+            log.warning(f"[get_incident] Incident {number} not found in database")
+            return {"success": False, "error": f"Incident {number} not found"}
+
+        enriched = enrich_row(result)
+        labels_count = len(enriched.get("_grafana_labels", {}))
+        parsed_data = enriched.get("_parsed", {})
+        
+        log.info(
+            f"[get_incident] Successfully fetched {number} | "
+            f"cmdb_ci_name={enriched.get('cmdb_ci_name')} | "
+            f"priority={enriched.get('priority')} | "
+            f"state={enriched.get('state')} | "
+            f"assignment_group={enriched.get('assignment_group_name')} | "
+            f"grafana_labels_count={labels_count} | "
+            f"alert_rule_uid={parsed_data.get('alert_rule_uid', 'N/A')}"
         )
-        result = await row.fetchone()
-
-    if not result:
-        log.warning(f"get_incident: {number} not found")
-        return {"success": False, "error": f"Incident {number} not found"}
-
-    enriched = enrich_row(result)
-    labels_count = len(enriched.get("_grafana_labels", {}))
-    log.info(f"get_incident: found {number}, cmdb_ci_name={enriched.get('cmdb_ci_name')}, "
-             f"priority={enriched.get('priority')}, grafana_labels={labels_count}")
-    return {"success": True, "result": enriched}
+        
+        return {"success": True, "result": enriched}
+    
+    except Exception as e:
+        log.error(f"[get_incident] Error fetching {number}: {type(e).__name__}: {e}")
+        raise
 
 
 async def _search_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
     conditions = []
     params: Dict[str, Any] = {}
-    log.info(f"search_incidents: filters={args}")
+    
+    log.info(f"[search_incidents] Starting search with filters: {json.dumps(args, default=str)}")
 
     if args.get("application_service"):
         conditions.append("i.cmdb_ci_name ILIKE %(app_svc)s")
         params["app_svc"] = f"%{args['application_service']}%"
+        log.debug(f"[search_incidents] Filter: application_service LIKE '%{args['application_service']}%'")
 
     if args.get("priority"):
         conditions.append("i.priority = %(priority)s")
         params["priority"] = args["priority"]
+        log.debug(f"[search_incidents] Filter: priority = {args['priority']}")
 
     if args.get("state"):
         conditions.append("i.state ILIKE %(state)s")
         params["state"] = f"%{args['state']}%"
+        log.debug(f"[search_incidents] Filter: state LIKE '%{args['state']}%'")
 
     if args.get("category"):
         conditions.append("i.category ILIKE %(category)s")
         params["category"] = f"%{args['category']}%"
+        log.debug(f"[search_incidents] Filter: category LIKE '%{args['category']}%'")
 
     if args.get("assignment_group_name"):
         conditions.append("i.assignment_group_name ILIKE %(agroup)s")
         params["agroup"] = f"%{args['assignment_group_name']}%"
+        log.debug(f"[search_incidents] Filter: assignment_group_name LIKE '%{args['assignment_group_name']}%'")
 
     if args.get("opened_after"):
         conditions.append("i.opened_at >= %(opened_after)s::timestamptz")
         params["opened_after"] = args["opened_after"]
+        log.debug(f"[search_incidents] Filter: opened_at >= {args['opened_after']}")
 
     if args.get("opened_before"):
         conditions.append("i.opened_at <= %(opened_before)s::timestamptz")
         params["opened_before"] = args["opened_before"]
+        log.debug(f"[search_incidents] Filter: opened_at <= {args['opened_before']}")
 
     limit = min(int(args.get("limit", 50)), 200)
+    log.debug(f"[search_incidents] Limit: {limit} (requested: {args.get('limit', 50)})")
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     cols = ", ".join(f'i."{c}"' for c in INCIDENT_COLUMNS)
@@ -391,97 +417,171 @@ async def _search_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
         LIMIT {limit}
     """
 
-    async with pool.connection() as conn:
-        log.debug(f"search_incidents: executing query with {len(conditions)} conditions, limit={limit}")
-        cur = await conn.execute(query, params)
-        rows = await cur.fetchall()
+    try:
+        async with pool.connection() as conn:
+            log.debug(f"[search_incidents] Executing query with {len(conditions)} conditions")
+            cur = await conn.execute(query, params)
+            rows = await cur.fetchall()
+            log.debug(f"[search_incidents] Query returned {len(rows)} rows")
 
-    log.info(f"search_incidents: returned {len(rows)} incidents")
-    return {
-        "success": True,
-        "result": [enrich_row(r) for r in rows],
-        "count": len(rows),
-    }
+        enriched_results = [enrich_row(r) for r in rows]
+        
+        # Log summary of results
+        if enriched_results:
+            services = set(r.get('cmdb_ci_name') for r in enriched_results if r.get('cmdb_ci_name'))
+            priorities = {}
+            for r in enriched_results:
+                p = r.get('priority', 'unknown')
+                priorities[p] = priorities.get(p, 0) + 1
+            
+            log.info(
+                f"[search_incidents] Successfully returned {len(enriched_results)} incidents | "
+                f"unique_services={len(services)} | "
+                f"priority_distribution={priorities}"
+            )
+        else:
+            log.info(f"[search_incidents] No incidents found matching filters")
+        
+        return {
+            "success": True,
+            "result": enriched_results,
+            "count": len(enriched_results),
+        }
+    
+    except Exception as e:
+        log.error(f"[search_incidents] Error executing query: {type(e).__name__}: {e}")
+        raise
 
 
 async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
     time_window = int(args.get("time_window_hours", 24))
-    log.info(f"get_related_incidents: number={args.get('number')}, "
-             f"app_svc={args.get('application_service')}, window={time_window}h")
+    number = args.get('number')
+    app_svc = args.get('application_service')
+    
+    log.info(
+        f"[get_related_incidents] Starting search | "
+        f"number={number} | "
+        f"application_service={app_svc} | "
+        f"time_window={time_window}h"
+    )
+    
     cols = ", ".join(f'i."{c}"' for c in INCIDENT_COLUMNS)
     results = {"by_parent": [], "by_ci": []}
 
-    async with pool.connection() as conn:
-        if args.get("number"):
-            number = args["number"].strip().upper()
-            cur = await conn.execute(
-                "SELECT cmdb_ci_name, opened_at, sys_id FROM public.incidents_snow WHERE number = %(number)s",
-                {"number": number},
-            )
-            ref = await cur.fetchone()
-            if not ref:
-                return {"success": False, "error": f"Reference incident {number} not found"}
+    try:
+        async with pool.connection() as conn:
+            if number:
+                number = number.strip().upper()
+                log.debug(f"[get_related_incidents] Fetching reference incident: {number}")
+                
+                cur = await conn.execute(
+                    "SELECT cmdb_ci_name, opened_at, sys_id FROM public.incidents_snow WHERE number = %(number)s",
+                    {"number": number},
+                )
+                ref = await cur.fetchone()
+                
+                if not ref:
+                    log.warning(f"[get_related_incidents] Reference incident {number} not found")
+                    return {"success": False, "error": f"Reference incident {number} not found"}
 
-            ci_name = ref["cmdb_ci_name"]
-            opened_at = ref["opened_at"]
-            sys_id = ref["sys_id"]
+                ci_name = ref["cmdb_ci_name"]
+                opened_at = ref["opened_at"]
+                sys_id = ref["sys_id"]
+                
+                log.debug(
+                    f"[get_related_incidents] Reference incident found | "
+                    f"cmdb_ci_name={ci_name} | "
+                    f"opened_at={opened_at} | "
+                    f"sys_id={sys_id}"
+                )
 
-            # Incidentes filhos ou com mesmo parent
-            cur = await conn.execute(
-                f"""SELECT {cols} FROM public.incidents_snow i
-                    WHERE (i.parent_incident = %(sys_id)s OR i.parent_incident = %(number)s)
-                    AND i.number != %(number)s
-                    ORDER BY i.opened_at DESC LIMIT 50""",
-                {"sys_id": sys_id, "number": number},
-            )
-            results["by_parent"] = [enrich_row(r) for r in await cur.fetchall()]
-
-            # Mesmo CI na janela de tempo
-            if ci_name:
+                # Incidentes filhos ou com mesmo parent
+                log.debug(f"[get_related_incidents] Searching for child/sibling incidents")
                 cur = await conn.execute(
                     f"""SELECT {cols} FROM public.incidents_snow i
-                        WHERE i.cmdb_ci_name = %(ci_name)s
-                        AND i.opened_at BETWEEN %(opened_at)s - interval '{time_window} hours'
-                                              AND %(opened_at)s + interval '{time_window} hours'
+                        WHERE (i.parent_incident = %(sys_id)s OR i.parent_incident = %(number)s)
                         AND i.number != %(number)s
                         ORDER BY i.opened_at DESC LIMIT 50""",
-                    {"ci_name": ci_name, "opened_at": opened_at, "number": number},
+                    {"sys_id": sys_id, "number": number},
                 )
-                results["by_ci"] = [enrich_row(r) for r in await cur.fetchall()]
+                by_parent_rows = await cur.fetchall()
+                results["by_parent"] = [enrich_row(r) for r in by_parent_rows]
+                log.debug(f"[get_related_incidents] Found {len(by_parent_rows)} incidents by parent relationship")
 
-        elif args.get("application_service"):
-            cur = await conn.execute(
-                f"""SELECT {cols} FROM public.incidents_snow i
-                    WHERE i.cmdb_ci_name ILIKE %(app_svc)s
-                    ORDER BY i.opened_at DESC LIMIT 50""",
-                {"app_svc": f"%{args['application_service']}%"},
-            )
-            results["by_ci"] = [enrich_row(r) for r in await cur.fetchall()]
+                # Mesmo CI na janela de tempo
+                if ci_name:
+                    log.debug(f"[get_related_incidents] Searching for incidents with same CI: {ci_name}")
+                    cur = await conn.execute(
+                        f"""SELECT {cols} FROM public.incidents_snow i
+                            WHERE i.cmdb_ci_name = %(ci_name)s
+                            AND i.opened_at BETWEEN %(opened_at)s - interval '{time_window} hours'
+                                                  AND %(opened_at)s + interval '{time_window} hours'
+                            AND i.number != %(number)s
+                            ORDER BY i.opened_at DESC LIMIT 50""",
+                        {"ci_name": ci_name, "opened_at": opened_at, "number": number},
+                    )
+                    by_ci_rows = await cur.fetchall()
+                    results["by_ci"] = [enrich_row(r) for r in by_ci_rows]
+                    log.debug(f"[get_related_incidents] Found {len(by_ci_rows)} incidents by CI in time window")
+                else:
+                    log.debug(f"[get_related_incidents] No cmdb_ci_name for reference incident, skipping CI search")
 
-    log.info(f"get_related_incidents: found {len(results['by_parent'])} by parent, "
-             f"{len(results['by_ci'])} by CI")
-    return {
-        "success": True,
-        "result": results,
-        "count": len(results["by_parent"]) + len(results["by_ci"]),
-    }
+            elif app_svc:
+                log.debug(f"[get_related_incidents] Searching by application_service: {app_svc}")
+                cur = await conn.execute(
+                    f"""SELECT {cols} FROM public.incidents_snow i
+                        WHERE i.cmdb_ci_name ILIKE %(app_svc)s
+                        ORDER BY i.opened_at DESC LIMIT 50""",
+                    {"app_svc": f"%{app_svc}%"},
+                )
+                by_ci_rows = await cur.fetchall()
+                results["by_ci"] = [enrich_row(r) for r in by_ci_rows]
+                log.debug(f"[get_related_incidents] Found {len(by_ci_rows)} incidents by application_service")
+            else:
+                log.warning(f"[get_related_incidents] No number or application_service provided")
+
+        total_count = len(results["by_parent"]) + len(results["by_ci"])
+        log.info(
+            f"[get_related_incidents] Search completed | "
+            f"by_parent={len(results['by_parent'])} | "
+            f"by_ci={len(results['by_ci'])} | "
+            f"total={total_count}"
+        )
+        
+        return {
+            "success": True,
+            "result": results,
+            "count": total_count,
+        }
+    
+    except Exception as e:
+        log.error(f"[get_related_incidents] Error: {type(e).__name__}: {e}")
+        raise
 
 
 async def _get_incident_stats(pool: AsyncConnectionPool, args: dict) -> dict:
     days = int(args.get("days", 30))
     group_by = args.get("group_by", "priority")
-    log.info(f"get_incident_stats: app_svc={args.get('application_service')}, "
-             f"days={days}, group_by={group_by}")
+    app_svc = args.get('application_service')
+    
+    log.info(
+        f"[get_incident_stats] Starting stats calculation | "
+        f"application_service={app_svc} | "
+        f"days={days} | "
+        f"group_by={group_by}"
+    )
 
     if group_by not in ("priority", "category", "state", "assignment_group_name"):
+        log.error(f"[get_incident_stats] Invalid group_by value: {group_by}")
         return {"success": False, "error": f"Invalid group_by: {group_by}"}
 
     conditions = [f"i.opened_at >= NOW() - interval '{days} days'"]
     params: Dict[str, Any] = {}
 
-    if args.get("application_service"):
+    if app_svc:
         conditions.append("i.cmdb_ci_name ILIKE %(app_svc)s")
-        params["app_svc"] = f"%{args['application_service']}%"
+        params["app_svc"] = f"%{app_svc}%"
+        log.debug(f"[get_incident_stats] Filter: application_service LIKE '%{app_svc}%'")
 
     where = f"WHERE {' AND '.join(conditions)}"
 
@@ -493,19 +593,38 @@ async def _get_incident_stats(pool: AsyncConnectionPool, args: dict) -> dict:
         ORDER BY count DESC
     """
 
-    async with pool.connection() as conn:
-        cur = await conn.execute(query, params)
-        rows = await cur.fetchall()
+    try:
+        async with pool.connection() as conn:
+            log.debug(f"[get_incident_stats] Executing stats query")
+            cur = await conn.execute(query, params)
+            rows = await cur.fetchall()
+            log.debug(f"[get_incident_stats] Query returned {len(rows)} groups")
 
-    total = sum(r["count"] for r in rows)
-    log.info(f"get_incident_stats: {len(rows)} groups, total={total}")
-    return {
-        "success": True,
-        "result": [{"key": r["group_key"], "count": r["count"]} for r in rows],
-        "total": total,
-        "period_days": days,
-        "group_by": group_by,
-    }
+        total = sum(r["count"] for r in rows)
+        result_data = [{"key": r["group_key"], "count": r["count"]} for r in rows]
+        
+        log.info(
+            f"[get_incident_stats] Stats calculated | "
+            f"groups={len(rows)} | "
+            f"total_incidents={total} | "
+            f"period={days} days"
+        )
+        
+        # Log top 3 groups
+        for i, row in enumerate(result_data[:3], 1):
+            log.debug(f"[get_incident_stats] Top {i}: {row['key']} = {row['count']} incidents")
+        
+        return {
+            "success": True,
+            "result": result_data,
+            "total": total,
+            "period_days": days,
+            "group_by": group_by,
+        }
+    
+    except Exception as e:
+        log.error(f"[get_incident_stats] Error: {type(e).__name__}: {e}")
+        raise
 
 
 async def main_stdio():
