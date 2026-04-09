@@ -14,4 +14,20 @@ data:
   tempo-mcp-endpoint: "http://tempo-mcp-server.observability.svc.cluster.local:8080"
   incidents-pg-mcp-endpoint: "http://incidents-pg-mcp-server.observability.svc.cluster.local:8080"
   athena-mcp-endpoint: "http://athena-mcp-server.observability.svc.cluster.local:8080"
-  openai-model: "gpt-4o"
+  
+  # LLM Configuration
+  # Modelo a ser usado (configurado no gateway)
+  openai-model: "gpt-5.2-openai"
+  
+  # Timeout total para requisições ao LLM Gateway (segundos)
+  # Aumentar se o gateway estiver lento ou se usar modelos grandes
+  # Padrão: 60s | Recomendado para ambientes corporativos: 120s
+  openai-timeout: "120"
+  
+  # Timeout para estabelecer conexão TCP com o LLM Gateway (segundos)
+  # Aumentar se houver problemas de rede/DNS
+  # Padrão: 10s | Recomendado para ambientes corporativos: 15s
+  openai-connect-timeout: "15"
+  
+  # Log level (DEBUG, INFO, WARNING, ERROR)
+  log-level: "INFO"

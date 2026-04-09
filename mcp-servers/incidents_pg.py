@@ -466,7 +466,7 @@ async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
     )
     
     cols = ", ".join(f'i."{c}"' for c in INCIDENT_COLUMNS)
-    results = {"by_parent": [], "by_ci": []}
+    results = {"by_parent": [], "by_ci": [], "by_description": []}
 
     try:
         async with pool.connection() as conn:
@@ -528,23 +528,57 @@ async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
 
             elif app_svc:
                 log.debug(f"[get_related_incidents] Searching by application_service: {app_svc}")
+                
+                # Busca 1: cmdb_ci_name (campo direto)
                 cur = await conn.execute(
                     f"""SELECT {cols} FROM public.incidents_snow i
                         WHERE i.cmdb_ci_name ILIKE %(app_svc)s
+                        AND i.opened_at >= NOW() - interval '{time_window} hours'
                         ORDER BY i.opened_at DESC LIMIT 50""",
                     {"app_svc": f"%{app_svc}%"},
                 )
                 by_ci_rows = await cur.fetchall()
                 results["by_ci"] = [enrich_row(r) for r in by_ci_rows]
-                log.debug(f"[get_related_incidents] Found {len(by_ci_rows)} incidents by application_service")
+                log.debug(f"[get_related_incidents] Found {len(by_ci_rows)} incidents by cmdb_ci_name")
+                
+                # Busca 2: description (labels do Grafana)
+                # Busca por "application_service=<valor>" ou "instance=<valor>" no description
+                log.debug(f"[get_related_incidents] Searching in description field for Grafana labels")
+                cur = await conn.execute(
+                    f"""SELECT {cols} FROM public.incidents_snow i
+                        WHERE (
+                            i.description ILIKE %(app_svc_label)s
+                            OR i.description ILIKE %(instance_label)s
+                            OR i.description ILIKE %(ci_label)s
+                        )
+                        AND i.opened_at >= NOW() - interval '{time_window} hours'
+                        ORDER BY i.opened_at DESC LIMIT 50""",
+                    {
+                        "app_svc_label": f"%application_service={app_svc}%",
+                        "instance_label": f"%instance={app_svc}%",
+                        "ci_label": f"%CI:{app_svc}%",
+                    },
+                )
+                by_desc_rows = await cur.fetchall()
+                
+                # Remover duplicatas (incidentes que já estão em by_ci)
+                by_ci_numbers = {r.get('number') for r in results["by_ci"]}
+                unique_by_desc = [r for r in by_desc_rows if r.get('number') not in by_ci_numbers]
+                
+                results["by_description"] = [enrich_row(r) for r in unique_by_desc]
+                log.debug(
+                    f"[get_related_incidents] Found {len(by_desc_rows)} incidents by description "
+                    f"({len(unique_by_desc)} unique after dedup)"
+                )
             else:
                 log.warning(f"[get_related_incidents] No number or application_service provided")
 
-        total_count = len(results["by_parent"]) + len(results["by_ci"])
+        total_count = len(results["by_parent"]) + len(results["by_ci"]) + len(results["by_description"])
         log.info(
             f"[get_related_incidents] Search completed | "
             f"by_parent={len(results['by_parent'])} | "
             f"by_ci={len(results['by_ci'])} | "
+            f"by_description={len(results['by_description'])} | "
             f"total={total_count}"
         )
         

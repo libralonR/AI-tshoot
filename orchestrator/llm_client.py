@@ -219,15 +219,29 @@ class LLMClient:
             log.error("[LLMClient.__init__] OPENAI_API_KEY env var not set")
             raise RuntimeError("OPENAI_API_KEY env var not set")
 
+        # Configurar timeouts (em segundos)
+        timeout = float(os.getenv("OPENAI_TIMEOUT", "60"))
+        connect_timeout = float(os.getenv("OPENAI_CONNECT_TIMEOUT", "10"))
+        
         # Skip SSL verification if behind corporate proxy
         import httpx as _httpx
-        http_client = _httpx.AsyncClient(verify=False)
+        http_client = _httpx.AsyncClient(
+            verify=False,
+            timeout=_httpx.Timeout(
+                timeout=timeout,
+                connect=connect_timeout,
+                read=timeout,
+                write=10.0,
+                pool=5.0
+            )
+        )
 
         base_url = os.getenv("OPENAI_BASE_URL")
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
             http_client=http_client,
+            max_retries=2,  # Reduzir retries para falhar mais rápido
         )
         self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
         self.system_prompt = _load_system_prompt()
@@ -238,6 +252,9 @@ class LLMClient:
             f"[LLMClient.__init__] Initialized | "
             f"model={self.model} | "
             f"base_url={base_url or 'default'} | "
+            f"timeout={timeout}s | "
+            f"connect_timeout={connect_timeout}s | "
+            f"max_retries=2 | "
             f"system_prompt_length={len(self.system_prompt)} | "
             f"available_tools={len(AVAILABLE_TOOLS)}"
         )
@@ -294,12 +311,46 @@ class LLMClient:
                 f"usage={response.usage.model_dump() if response.usage else 'N/A'}"
             )
         except Exception as e:
-            log.error(
-                f"[LLMClient.chat] OpenAI API call failed | "
-                f"error_type={type(e).__name__} | "
-                f"error={str(e)[:200]}"
-            )
-            raise
+            api_time = time.time() - start_time
+            error_type = type(e).__name__
+            error_msg = str(e)
+            
+            # Identificar tipo específico de erro
+            if "ConnectTimeout" in error_type or "ConnectError" in error_type:
+                log.error(
+                    f"[LLMClient.chat] Connection timeout/error | "
+                    f"error_type={error_type} | "
+                    f"elapsed={api_time:.3f}s | "
+                    f"base_url={os.getenv('OPENAI_BASE_URL')} | "
+                    f"error={error_msg[:200]}"
+                )
+                raise RuntimeError(
+                    f"Não foi possível conectar ao LLM Gateway. "
+                    f"Verifique conectividade de rede e DNS. "
+                    f"URL: {os.getenv('OPENAI_BASE_URL')} | "
+                    f"Erro: {error_msg[:100]}"
+                ) from e
+            elif "APITimeoutError" in error_type:
+                log.error(
+                    f"[LLMClient.chat] API timeout | "
+                    f"error_type={error_type} | "
+                    f"elapsed={api_time:.3f}s | "
+                    f"timeout={os.getenv('OPENAI_TIMEOUT', '60')}s | "
+                    f"error={error_msg[:200]}"
+                )
+                raise RuntimeError(
+                    f"Timeout ao chamar LLM Gateway após {api_time:.1f}s. "
+                    f"Aumente OPENAI_TIMEOUT (atual: {os.getenv('OPENAI_TIMEOUT', '60')}s) "
+                    f"ou verifique performance do gateway."
+                ) from e
+            else:
+                log.error(
+                    f"[LLMClient.chat] OpenAI API call failed | "
+                    f"error_type={error_type} | "
+                    f"elapsed={api_time:.3f}s | "
+                    f"error={error_msg[:200]}"
+                )
+                raise
 
         message = response.choices[0].message
         tool_call_iteration = 0
@@ -392,11 +443,32 @@ class LLMClient:
                     f"usage={response.usage.model_dump() if response.usage else 'N/A'}"
                 )
             except Exception as e:
-                log.error(
-                    f"[LLMClient.chat] OpenAI API call failed (iteration {tool_call_iteration}) | "
-                    f"error_type={type(e).__name__} | "
-                    f"error={str(e)[:200]}"
-                )
+                api_time = time.time() - start_time
+                error_type = type(e).__name__
+                error_msg = str(e)
+                
+                # Identificar tipo específico de erro
+                if "ConnectTimeout" in error_type or "ConnectError" in error_type:
+                    log.error(
+                        f"[LLMClient.chat] Connection timeout/error (iteration {tool_call_iteration}) | "
+                        f"error_type={error_type} | "
+                        f"elapsed={api_time:.3f}s | "
+                        f"error={error_msg[:200]}"
+                    )
+                elif "APITimeoutError" in error_type:
+                    log.error(
+                        f"[LLMClient.chat] API timeout (iteration {tool_call_iteration}) | "
+                        f"error_type={error_type} | "
+                        f"elapsed={api_time:.3f}s | "
+                        f"error={error_msg[:200]}"
+                    )
+                else:
+                    log.error(
+                        f"[LLMClient.chat] OpenAI API call failed (iteration {tool_call_iteration}) | "
+                        f"error_type={error_type} | "
+                        f"elapsed={api_time:.3f}s | "
+                        f"error={error_msg[:200]}"
+                    )
                 raise
                 
             message = response.choices[0].message
