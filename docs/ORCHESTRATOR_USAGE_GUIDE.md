@@ -129,19 +129,27 @@ curl -X POST http://localhost:8080/investigate \
 
 **O que acontece:**
 1. Busca o incidente no PostgreSQL (`incidents_snow`)
-2. Extrai `cmdb_ci_name` → normaliza para `application_service`
-3. Define o scope com `serviceName = cmdb_ci_name`
+2. Extrai `application_service` do campo `description` (PRIORIDADE) ou `cmdb_ci_name` (fallback)
+3. Define o scope com `serviceName = application_service`
 4. Busca alertas firing no Grafana para esse `application_service`
-5. Busca incidentes relacionados (mesmo CI ou parent_incident)
+5. Busca incidentes relacionados:
+   - **PRIORIDADE**: Busca no campo `description` por padrões (`application_service=`, `instance=`, `CI:`)
+   - **FALLBACK**: Busca no campo `cmdb_ci_name`
+   - Busca por `parent_incident` (incidentes filhos/irmãos)
 6. Correlaciona evidências usando `application_service` como chave
 7. Gera hipóteses baseadas nas evidências
 
 **Saída esperada:**
 - Evidence tipo `INCIDENT_RELATED` com dados do incidente
 - Evidence tipo `ALERT_FIRING` se houver alertas para o serviço
-- Evidence tipo `INCIDENT_RELATED` com incidentes relacionados
-- Hypotheses com componente suspeito = `cmdb_ci_name`
+- Evidence tipo `INCIDENT_RELATED` com incidentes relacionados (agrupados em `by_description`, `by_ci`, `by_parent`)
+- Hypotheses com componente suspeito = `application_service` (extraído do `description` ou `cmdb_ci_name`)
 - CorrelationGaps se alertas não tiverem `application_service`
+
+**Nota sobre busca de incidentes:**
+- O campo `cmdb_ci_name` **nem sempre está preenchido**
+- As labels do Grafana estão **SEMPRE** no campo `description`
+- A busca **prioriza** o campo `description` para maior cobertura
 
 ---
 
@@ -163,7 +171,9 @@ curl -X POST http://localhost:8080/investigate \
 2. Extrai labels do alerta (`application_service`, `env`, `cluster`, `namespace`, etc)
 3. Define o scope com os labels extraídos
 4. Busca outros alertas firing para o mesmo serviço
-5. Busca incidentes relacionados usando `application_service` → `cmdb_ci_name`
+5. Busca incidentes relacionados usando `application_service`:
+   - **PRIORIDADE**: Busca no campo `description` por padrões (`application_service=`, `instance=`, `CI:`)
+   - **FALLBACK**: Busca no campo `cmdb_ci_name`
 6. Correlaciona evidências
 7. Gera hipóteses
 
@@ -198,15 +208,19 @@ curl -X POST http://localhost:8080/investigate \
 **O que acontece:**
 1. Define scope com `serviceName = aml-worker-service` e `environment = production`
 2. Busca alertas firing para esse serviço
-3. Busca incidentes relacionados usando `cmdb_ci_name = aml-worker-service`
+3. Busca incidentes relacionados usando `application_service = aml-worker-service`:
+   - **PRIORIDADE**: Busca no campo `description` por padrões (`application_service=aml-worker-service`, `instance=aml-worker-service`, `CI:aml-worker-service`)
+   - **FALLBACK**: Busca no campo `cmdb_ci_name = aml-worker-service`
 4. Correlaciona evidências
 5. Gera hipóteses
 
 **Saída esperada:**
 - Evidence tipo `ALERT_FIRING` se houver alertas
-- Evidence tipo `INCIDENT_RELATED` se houver incidentes
+- Evidence tipo `INCIDENT_RELATED` se houver incidentes (busca prioritária no `description`)
 - Scope com `serviceName = aml-worker-service`
 - Hypotheses com componente suspeito = `aml-worker-service`
+
+**Nota**: A busca de incidentes encontrará resultados mesmo se `cmdb_ci_name` estiver vazio, pois busca no campo `description` onde as labels do Grafana estão sempre presentes.
 
 ---
 
@@ -309,7 +323,7 @@ curl -X POST http://localhost:8080/investigate \
 
 **Por que não buscou incidentes?**
 
-No código `orchestrator.py`, linha 158-168:
+No código `orchestrator.py`, a busca de incidentes só é executada quando há `serviceName` ou `incident_number`:
 
 ```python
 async def _gather_signals(self, case_file: CaseFile) -> List[Evidence]:
@@ -327,11 +341,11 @@ async def _gather_signals(self, case_file: CaseFile) -> List[Evidence]:
         )
 ```
 
-**Solução esperada:**
-1. Buscar alertas primeiro
-2. Extrair `application_service` dos alertas encontrados
-3. Usar esse `application_service` para buscar incidentes relacionados
-4. Correlacionar alertas + incidentes
+**Limitação conhecida**: Quando o filtro é apenas por `business_capability`, `owner_squad`, ou `severidade` (sem `application_service`), o orchestrator não busca incidentes porque `serviceName = None`.
+
+**Workaround**: Sempre incluir `application_service` nos filtros quando quiser correlacionar com incidentes.
+
+**Nota sobre a busca de incidentes**: Quando a busca é executada (com `application_service` presente), ela **prioriza** o campo `description` onde as labels do Grafana estão sempre presentes, garantindo maior cobertura mesmo quando `cmdb_ci_name` está vazio.
 
 ---
 
@@ -446,7 +460,9 @@ curl -X POST http://localhost:8080/investigate \
 1. Define scope com `serviceName = payment-api` e `environment = production`
 2. Adiciona outros filtros em `additionalLabels`
 3. Busca alertas firing com TODOS os filtros
-4. Busca incidentes relacionados usando `cmdb_ci_name = payment-api`
+4. Busca incidentes relacionados usando `application_service = payment-api`:
+   - **PRIORIDADE**: Busca no campo `description` por padrões
+   - **FALLBACK**: Busca no campo `cmdb_ci_name`
 5. Correlaciona evidências
 
 **Saída esperada:**
@@ -481,15 +497,18 @@ standard_labels = [
 
 Aliases são normalizados para labels canônicos:
 
-| Original                  | Fonte         | Canônico              |
-|---------------------------|---------------|-----------------------|
-| `application_service`     | Grafana       | `application_service` |
-| `cmdb_ci_name`            | Incidentes PG | `application_service` |
-| `service.name`            | Traces        | `application_service` |
-| `owner_squad`             | Grafana       | `owner_squad`         |
-| `assignment_group_name`   | Incidentes PG | `owner_squad`         |
-| `Severidade`              | Grafana       | `severity`            |
-| `priority`                | Incidentes PG | `severity`            |
+| Original                  | Fonte         | Canônico              | Observação |
+|---------------------------|---------------|-----------------------|------------|
+| `application_service`     | Grafana       | `application_service` | |
+| `cmdb_ci_name`            | Incidentes PG | `application_service` | **Nem sempre preenchido** |
+| `description` (parseado)  | Incidentes PG | `application_service` | **SEMPRE preenchido - busca prioritária** |
+| `service.name`            | Traces        | `application_service` | |
+| `owner_squad`             | Grafana       | `owner_squad`         | |
+| `assignment_group_name`   | Incidentes PG | `owner_squad`         | |
+| `Severidade`              | Grafana       | `severity`            | |
+| `priority`                | Incidentes PG | `severity`            | |
+
+**IMPORTANTE**: A busca de incidentes **prioriza** o campo `description` (sempre preenchido com labels do Grafana) sobre `cmdb_ci_name` (nem sempre preenchido).
 
 ### Ajuste de Confidence
 
@@ -558,6 +577,8 @@ O `HypothesisGenerator` analisa as evidências e gera hipóteses baseadas em:
 **Workaround**: Sempre incluir `application_service` nos filtros quando quiser correlacionar com incidentes.
 
 **Solução proposta**: Extrair `application_service` dos alertas encontrados e usar para buscar incidentes em uma segunda fase.
+
+**Nota**: Quando a busca de incidentes é executada (com `application_service` presente), ela utiliza a **estratégia de busca prioritária no campo `description`**, garantindo maior cobertura mesmo quando `cmdb_ci_name` está vazio.
 
 ---
 
@@ -670,3 +691,16 @@ curl -X POST http://localhost:8080/chat \
 ## Conclusão
 
 O Orchestrator é uma ferramenta poderosa para triagem e análise de problemas, mas tem limitações conhecidas na correlação de evidências quando filtros não incluem `application_service`. Para melhores resultados, sempre forneça o máximo de contexto possível nos filtros, especialmente `application_service` e `env`.
+
+### Melhorias Implementadas na Busca de Incidentes
+
+A busca de incidentes foi otimizada para lidar com o fato de que o campo `cmdb_ci_name` **nem sempre está preenchido**:
+
+- ✅ **Busca prioritária no campo `description`**: Onde as labels do Grafana estão **SEMPRE** presentes
+- ✅ **Múltiplos padrões de busca**: `application_service=`, `instance=`, `CI:`, `Fingerprint:`
+- ✅ **Fallback automático**: Usa `cmdb_ci_name` quando necessário
+- ✅ **Deduplicação automática**: Remove duplicatas entre as buscas
+- ✅ **Parsing automático**: Extrai labels do Grafana do campo `description`
+- ✅ **Resultado estruturado**: Agrupa incidentes por origem (`by_description`, `by_ci`, `by_parent`)
+
+Para mais detalhes, consulte: `docs/INCIDENTS_SEARCH_STRATEGY.md`

@@ -60,7 +60,8 @@ class IncidentsAgent:
 
         evidences = []
         all_incidents = result.get("result", {})
-        for source_key in ("by_parent", "by_ci"):
+        # Iterar sobre todas as fontes: by_parent, by_ci, by_description
+        for source_key in ("by_parent", "by_ci", "by_description"):
             for inc in all_incidents.get(source_key, []):
                 inc_str = json.dumps(inc)
                 redacted_str, was_redacted = Guardrails.redact_pii(inc_str)

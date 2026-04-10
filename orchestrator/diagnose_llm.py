@@ -158,7 +158,7 @@ async def test_mcp_servers():
     }
     
     results = []
-    async with httpx.AsyncClient(timeout=5.0) as client:
+    async with httpx.AsyncClient(timeout=5.0, verify=False) as client:
         for name, url in servers.items():
             try:
                 start = time.time()

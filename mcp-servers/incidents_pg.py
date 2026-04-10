@@ -368,10 +368,21 @@ async def _search_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
     
     log.info(f"[search_incidents] Starting search with filters: {json.dumps(args, default=str)}")
 
+    # PRIORIDADE: Buscar application_service no description (onde sempre está)
     if args.get("application_service"):
-        conditions.append("i.cmdb_ci_name ILIKE %(app_svc)s")
-        params["app_svc"] = f"%{args['application_service']}%"
-        log.debug(f"[search_incidents] Filter: application_service LIKE '%{args['application_service']}%'")
+        app_svc = args['application_service']
+        # Buscar tanto no cmdb_ci_name quanto no description
+        conditions.append(
+            "(i.cmdb_ci_name ILIKE %(app_svc)s OR "
+            "i.description ILIKE %(app_svc_label)s OR "
+            "i.description ILIKE %(instance_label)s OR "
+            "i.description ILIKE %(ci_label)s)"
+        )
+        params["app_svc"] = f"%{app_svc}%"
+        params["app_svc_label"] = f"%application_service={app_svc}%"
+        params["instance_label"] = f"%instance={app_svc}%"
+        params["ci_label"] = f"%CI:{app_svc}%"
+        log.debug(f"[search_incidents] Filter: application_service in cmdb_ci_name OR description")
 
     if args.get("priority"):
         conditions.append("i.priority = %(priority)s")
@@ -475,7 +486,7 @@ async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
                 log.debug(f"[get_related_incidents] Fetching reference incident: {number}")
                 
                 cur = await conn.execute(
-                    "SELECT cmdb_ci_name, opened_at, sys_id FROM public.incidents_snow WHERE number = %(number)s",
+                    "SELECT cmdb_ci_name, opened_at, sys_id, description FROM public.incidents_snow WHERE number = %(number)s",
                     {"number": number},
                 )
                 ref = await cur.fetchone()
@@ -487,10 +498,19 @@ async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
                 ci_name = ref["cmdb_ci_name"]
                 opened_at = ref["opened_at"]
                 sys_id = ref["sys_id"]
+                description = ref["description"]
+                
+                # Extrair application_service do description do incidente de referência
+                ref_app_svc = None
+                if description:
+                    parsed = parse_description(description)
+                    grafana_labels = parsed.get("grafana_labels", {})
+                    ref_app_svc = grafana_labels.get("application_service")
                 
                 log.debug(
                     f"[get_related_incidents] Reference incident found | "
                     f"cmdb_ci_name={ci_name} | "
+                    f"application_service_from_description={ref_app_svc} | "
                     f"opened_at={opened_at} | "
                     f"sys_id={sys_id}"
                 )
@@ -508,9 +528,35 @@ async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
                 results["by_parent"] = [enrich_row(r) for r in by_parent_rows]
                 log.debug(f"[get_related_incidents] Found {len(by_parent_rows)} incidents by parent relationship")
 
-                # Mesmo CI na janela de tempo
-                if ci_name:
-                    log.debug(f"[get_related_incidents] Searching for incidents with same CI: {ci_name}")
+                # PRIORIDADE: Buscar por application_service extraído do description
+                if ref_app_svc:
+                    log.debug(f"[get_related_incidents] Priority search by application_service from description: {ref_app_svc}")
+                    cur = await conn.execute(
+                        f"""SELECT {cols} FROM public.incidents_snow i
+                            WHERE (
+                                i.description ILIKE %(app_svc_label)s
+                                OR i.description ILIKE %(instance_label)s
+                                OR i.description ILIKE %(ci_label)s
+                            )
+                            AND i.opened_at BETWEEN %(opened_at)s - interval '{time_window} hours'
+                                                  AND %(opened_at)s + interval '{time_window} hours'
+                            AND i.number != %(number)s
+                            ORDER BY i.opened_at DESC LIMIT 100""",
+                        {
+                            "app_svc_label": f"%application_service={ref_app_svc}%",
+                            "instance_label": f"%instance={ref_app_svc}%",
+                            "ci_label": f"%CI:{ref_app_svc}%",
+                            "opened_at": opened_at,
+                            "number": number,
+                        },
+                    )
+                    by_desc_rows = await cur.fetchall()
+                    results["by_description"] = [enrich_row(r) for r in by_desc_rows]
+                    log.debug(f"[get_related_incidents] Found {len(by_desc_rows)} incidents by application_service in description")
+
+                # FALLBACK: Buscar por cmdb_ci_name se existir e não encontrou nada ainda
+                if ci_name and not results["by_description"]:
+                    log.debug(f"[get_related_incidents] Fallback: Searching by cmdb_ci_name: {ci_name}")
                     cur = await conn.execute(
                         f"""SELECT {cols} FROM public.incidents_snow i
                             WHERE i.cmdb_ci_name = %(ci_name)s
@@ -522,28 +568,15 @@ async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
                     )
                     by_ci_rows = await cur.fetchall()
                     results["by_ci"] = [enrich_row(r) for r in by_ci_rows]
-                    log.debug(f"[get_related_incidents] Found {len(by_ci_rows)} incidents by CI in time window")
-                else:
-                    log.debug(f"[get_related_incidents] No cmdb_ci_name for reference incident, skipping CI search")
+                    log.debug(f"[get_related_incidents] Found {len(by_ci_rows)} incidents by cmdb_ci_name (fallback)")
+                elif not ref_app_svc and not ci_name:
+                    log.warning(f"[get_related_incidents] No application_service or cmdb_ci_name found for reference incident")
 
             elif app_svc:
                 log.debug(f"[get_related_incidents] Searching by application_service: {app_svc}")
                 
-                # Busca 1: cmdb_ci_name (campo direto)
-                cur = await conn.execute(
-                    f"""SELECT {cols} FROM public.incidents_snow i
-                        WHERE i.cmdb_ci_name ILIKE %(app_svc)s
-                        AND i.opened_at >= NOW() - interval '{time_window} hours'
-                        ORDER BY i.opened_at DESC LIMIT 50""",
-                    {"app_svc": f"%{app_svc}%"},
-                )
-                by_ci_rows = await cur.fetchall()
-                results["by_ci"] = [enrich_row(r) for r in by_ci_rows]
-                log.debug(f"[get_related_incidents] Found {len(by_ci_rows)} incidents by cmdb_ci_name")
-                
-                # Busca 2: description (labels do Grafana)
-                # Busca por "application_service=<valor>" ou "instance=<valor>" no description
-                log.debug(f"[get_related_incidents] Searching in description field for Grafana labels")
+                # PRIORIDADE 1: Buscar no description (onde as informações SEMPRE estão)
+                log.debug(f"[get_related_incidents] Priority search: description field for Grafana labels")
                 cur = await conn.execute(
                     f"""SELECT {cols} FROM public.incidents_snow i
                         WHERE (
@@ -552,7 +585,7 @@ async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
                             OR i.description ILIKE %(ci_label)s
                         )
                         AND i.opened_at >= NOW() - interval '{time_window} hours'
-                        ORDER BY i.opened_at DESC LIMIT 50""",
+                        ORDER BY i.opened_at DESC LIMIT 100""",
                     {
                         "app_svc_label": f"%application_service={app_svc}%",
                         "instance_label": f"%instance={app_svc}%",
@@ -560,15 +593,28 @@ async def _get_related_incidents(pool: AsyncConnectionPool, args: dict) -> dict:
                     },
                 )
                 by_desc_rows = await cur.fetchall()
+                results["by_description"] = [enrich_row(r) for r in by_desc_rows]
+                log.debug(f"[get_related_incidents] Found {len(by_desc_rows)} incidents by description (priority)")
                 
-                # Remover duplicatas (incidentes que já estão em by_ci)
-                by_ci_numbers = {r.get('number') for r in results["by_ci"]}
-                unique_by_desc = [r for r in by_desc_rows if r.get('number') not in by_ci_numbers]
+                # FALLBACK: Buscar por cmdb_ci_name (pode estar vazio, então é fallback)
+                log.debug(f"[get_related_incidents] Fallback search: cmdb_ci_name field")
+                cur = await conn.execute(
+                    f"""SELECT {cols} FROM public.incidents_snow i
+                        WHERE i.cmdb_ci_name ILIKE %(app_svc)s
+                        AND i.opened_at >= NOW() - interval '{time_window} hours'
+                        ORDER BY i.opened_at DESC LIMIT 50""",
+                    {"app_svc": f"%{app_svc}%"},
+                )
+                by_ci_rows = await cur.fetchall()
                 
-                results["by_description"] = [enrich_row(r) for r in unique_by_desc]
+                # Remover duplicatas (incidentes que já estão em by_description)
+                by_desc_numbers = {r.get('number') for r in results["by_description"]}
+                unique_by_ci = [r for r in by_ci_rows if r.get('number') not in by_desc_numbers]
+                
+                results["by_ci"] = [enrich_row(r) for r in unique_by_ci]
                 log.debug(
-                    f"[get_related_incidents] Found {len(by_desc_rows)} incidents by description "
-                    f"({len(unique_by_desc)} unique after dedup)"
+                    f"[get_related_incidents] Found {len(by_ci_rows)} incidents by cmdb_ci_name "
+                    f"({len(unique_by_ci)} unique after dedup)"
                 )
             else:
                 log.warning(f"[get_related_incidents] No number or application_service provided")

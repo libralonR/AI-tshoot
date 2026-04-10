@@ -71,11 +71,26 @@ Regras de formatação:
 
 ## Correlação entre fontes
 
-| Grafana label           | Incidente (PG) field     | Label canônico         |
-|-------------------------|--------------------------|------------------------|
-| `application_service`   | `cmdb_ci_name`           | `application_service`  |
-| `owner_squad`           | `assignment_group_name`  | `owner_squad`          |
-| `Severidade`            | `priority`               | `severity`             |
+**IMPORTANTE**: O campo `cmdb_ci_name` **nem sempre está preenchido** nos incidentes. A busca de incidentes **prioriza** o campo `description`, que **SEMPRE** contém as labels do alerta Grafana.
+
+| Grafana label           | Incidente (PG) field     | Label canônico         | Observação |
+|-------------------------|--------------------------|------------------------|------------|
+| `application_service`   | `cmdb_ci_name` OU `description` | `application_service`  | **Busca prioritária no `description`** |
+| `owner_squad`           | `assignment_group_name`  | `owner_squad`          | |
+| `Severidade`            | `priority`               | `severity`             | |
+| `fingerprint`           | `description` (parseado) | `fingerprint`          | Correlação precisa alerta ↔ incidente |
+
+### Estratégia de Busca de Incidentes
+
+1. **PRIORIDADE**: Buscar no campo `description` por padrões:
+   - `application_service=<valor>`
+   - `instance=<valor>`
+   - `CI:<valor>`
+   - `Fingerprint: <valor>`
+
+2. **FALLBACK**: Buscar no campo `cmdb_ci_name` (somente se necessário)
+
+3. **RESULTADO**: Incidentes agrupados em `by_description` (prioridade), `by_ci` (fallback), `by_parent` (relacionados)
 
 ## Confiança
 

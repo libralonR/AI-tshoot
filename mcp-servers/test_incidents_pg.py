@@ -66,7 +66,7 @@ async def test_via_rest(base_url: str = "http://localhost:8082"):
     """Test via REST endpoints (requires SSE mode running)."""
     import httpx
 
-    client = httpx.AsyncClient(timeout=30)
+    client = httpx.AsyncClient(timeout=30, verify=False)
     test_results = {"passed": 0, "failed": 0, "total": 0}
 
     print_header("Testing Incidents PG MCP via REST")

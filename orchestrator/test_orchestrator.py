@@ -13,7 +13,7 @@ import httpx
 async def test_health():
     """Test health endpoint"""
     print("Testing /health endpoint...")
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False) as client:
         response = await client.get("http://localhost:8080/health")
         print(f"Status: {response.status_code}")
         print(f"Response: {response.json()}")
@@ -23,7 +23,7 @@ async def test_health():
 async def test_steering():
     """Test steering endpoint"""
     print("Testing /steering endpoint...")
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False) as client:
         response = await client.get("http://localhost:8080/steering")
         print(f"Status: {response.status_code}")
         data = response.json()
@@ -35,7 +35,7 @@ async def test_steering():
 async def test_investigate_alert():
     """Test investigate endpoint with alert UID"""
     print("Testing /investigate endpoint (ALERT_UID)...")
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
         payload = {
             "input_type": "ALERT_UID",
             "value": "abc123def456",
@@ -78,7 +78,7 @@ async def test_investigate_alert():
 async def test_investigate_symptom():
     """Test investigate endpoint with symptom"""
     print("Testing /investigate endpoint (SYMPTOM)...")
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
         payload = {
             "input_type": "SYMPTOM",
             "value": "API Gateway returning 500 errors in production",
