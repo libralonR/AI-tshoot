@@ -23,9 +23,12 @@ Pesquisa incidentes por filtros.
 - Output: lista de incidentes
 
 ### get_related_incidents
-Busca incidentes relacionados.
-- Input: `number` ou `application_service`, `time_window_hours`
-- Output: incidentes por parent_incident e por mesmo CI
+Busca incidentes relacionados por múltiplas labels do Grafana.
+- Input: `number` ou labels (`application_service`, `business_capability`, `business_domain`, `business_service`, `owner_squad`, `owner_sre`), `time_window_hours`
+- Busca no bloco `Labels:` do campo `description` (formato: `- label=valor`)
+- Quando múltiplas labels são fornecidas, todas devem estar presentes (AND)
+- Fallback para `cmdb_ci_name` quando `application_service` é fornecido
+- Output: incidentes agrupados em `by_parent`, `by_ci`, `by_description`
 
 ### get_incident_stats
 Estatísticas agregadas.
@@ -52,10 +55,9 @@ Estatísticas agregadas.
 
 Todas as funções de busca **priorizam** o campo `description` e usam `cmdb_ci_name` apenas como fallback:
 
-1. **PRIORIDADE**: Buscar no `description` por padrões:
-   - `application_service=<valor>`
-   - `instance=<valor>`
-   - `CI:<valor>`
+1. **PRIORIDADE**: Buscar no bloco `Labels:` do `description`:
+   - Formato: `- application_service=<valor>`
+   - Busca exata nas labels estruturadas do Grafana
 
 2. **FALLBACK**: Buscar no `cmdb_ci_name` (somente se necessário)
 

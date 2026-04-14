@@ -13,13 +13,13 @@ description: Regras de correlação entre alertas (Grafana) e incidentes (Postgr
 
 ### Estratégia de Busca
 
-1. **PRIORIDADE**: Buscar no campo `description` por padrões:
-   - `application_service=<valor>`
-   - `instance=<valor>`
-   - `CI:<valor>`
-   - `Fingerprint: <valor>`
+1. **PRIORIDADE**: Buscar no bloco `Labels:` do campo `description`:
+   - Formato: `- label=<valor>`
+   - Busca exata nas labels estruturadas do Grafana
+   - Labels suportadas como filtro direto: `application_service`, `business_capability`, `business_domain`, `business_service`, `owner_squad`, `owner_sre`
+   - Múltiplas labels podem ser combinadas (AND)
 
-2. **FALLBACK**: Buscar no campo `cmdb_ci_name` (somente se necessário)
+2. **FALLBACK**: Buscar no campo `cmdb_ci_name` (somente quando `application_service` é fornecido)
 
 3. **NORMALIZAÇÃO**: Sempre normalizar para `application_service` canônico
 
@@ -44,13 +44,12 @@ business_capability → business_domain → business_service → application_ser
 
 **IMPORTANTE**: A busca de incidentes **prioriza** o campo `description` (sempre preenchido) sobre `cmdb_ci_name` (nem sempre preenchido).
 
-1. Extrair `application_service` do alerta
-2. Buscar incidentes no campo `description` por padrões:
-   - `application_service=<valor>`
-   - `instance=<valor>`
-   - `CI:<valor>`
-   - `Fingerprint: <valor>` (correlação precisa)
-3. Fallback: Buscar no `cmdb_ci_name` se necessário
+1. Extrair labels do alerta (`application_service`, `business_capability`, `owner_squad`, etc.)
+2. Buscar incidentes no bloco `Labels:` do campo `description`:
+   - Formato: `- label=<valor>` (ex: `- application_service=rundeck-hom`)
+   - Suporta múltiplas labels combinadas (AND)
+   - Labels suportadas: `application_service`, `business_capability`, `business_domain`, `business_service`, `owner_squad`, `owner_sre`
+3. Fallback: Buscar no `cmdb_ci_name` se `application_service` foi fornecido
 4. Enriquecer com `business_capability`, `owner_squad`, `owner_sre`
 5. Calcular confidence baseado em matches
 
@@ -60,7 +59,7 @@ business_capability → business_domain → business_service → application_ser
 {
     "by_parent": [],       // Incidentes filhos/irmãos
     "by_ci": [],           // Por cmdb_ci_name (fallback)
-    "by_description": []   // Por labels no description (PRIORIDADE)
+    "by_description": []   // Por labels do Grafana no description (PRIORIDADE)
 }
 ```
 
@@ -70,8 +69,10 @@ business_capability → business_domain → business_service → application_ser
 - Labels K8s (`namespace`, `pod`, `cluster`) nem sempre presentes nos alertas
 
 ## Melhorias Implementadas
-- ✅ Busca prioritária no campo `description` (sempre preenchido)
-- ✅ Busca por múltiplos padrões: `application_service=`, `instance=`, `CI:`
+- ✅ Busca prioritária no bloco `Labels:` do campo `description` (sempre preenchido)
+- ✅ Busca exata por labels estruturadas do Grafana: `- label=<valor>`
 - ✅ Fallback automático para `cmdb_ci_name`
 - ✅ Deduplicação automática de resultados
 - ✅ Parsing automático de labels do Grafana no `description`
+- ✅ Filtro direto por múltiplas labels: `application_service`, `business_capability`, `business_domain`, `business_service`, `owner_squad`, `owner_sre`
+- ✅ Filtros combinados (AND) para busca mais precisa

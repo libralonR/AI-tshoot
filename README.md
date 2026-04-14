@@ -1,5 +1,7 @@
 # Observability Troubleshooting Copilot
 
+> **📊 Code Review Completo Disponível**: Veja [docs/CODE_REVIEW_INDEX.md](docs/CODE_REVIEW_INDEX.md) para análise técnica completa, recomendações e roadmap executável.
+
 Copilot de observabilidade que correlaciona métricas, alertas, incidentes e traces para acelerar triagem e reduzir MTTR.
 
 ## Arquitetura

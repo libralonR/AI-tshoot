@@ -19,13 +19,11 @@ WHERE i.cmdb_ci_name ILIKE '%rundeck-hom%'
 ```sql
 WHERE (
     i.cmdb_ci_name ILIKE '%rundeck-hom%'
-    OR i.description ILIKE '%application_service=rundeck-hom%'
-    OR i.description ILIKE '%instance=rundeck-hom%'
-    OR i.description ILIKE '%CI:rundeck-hom%'
+    OR i.description ILIKE '%- application_service=rundeck-hom%'
 )
 ```
 
-**Resultado:** Encontra incidentes mesmo quando `cmdb_ci_name` está vazio.
+**Resultado:** Encontra incidentes mesmo quando `cmdb_ci_name` está vazio, buscando nas labels estruturadas do Grafana.
 
 ---
 
@@ -33,17 +31,16 @@ WHERE (
 
 **Estratégia:**
 
-1. **PRIORIDADE:** Buscar no `description` (LIMIT 100)
+1. **PRIORIDADE:** Buscar no bloco `Labels:` do `description` (LIMIT 100)
+   - Suporta múltiplas labels: `application_service`, `business_capability`, `business_domain`, `business_service`, `owner_squad`, `owner_sre`
+   - Quando múltiplas labels são fornecidas, todas devem estar presentes (AND)
    ```sql
-   WHERE (
-       i.description ILIKE '%application_service=rundeck-hom%'
-       OR i.description ILIKE '%instance=rundeck-hom%'
-       OR i.description ILIKE '%CI:rundeck-hom%'
-   )
+   WHERE i.description ILIKE '%- application_service=rundeck-hom%'
+   AND i.description ILIKE '%- owner_squad=l-sre-observability%'
    AND i.opened_at >= NOW() - interval '24 hours'
    ```
 
-2. **FALLBACK:** Buscar no `cmdb_ci_name` (LIMIT 50)
+2. **FALLBACK:** Buscar no `cmdb_ci_name` (LIMIT 50, somente se `application_service` foi fornecido)
    ```sql
    WHERE i.cmdb_ci_name ILIKE '%rundeck-hom%'
    AND i.opened_at >= NOW() - interval '24 hours'
@@ -51,13 +48,33 @@ WHERE (
 
 3. **DEDUPLICAÇÃO:** Remove incidentes duplicados encontrados em ambas as buscas
 
+**Exemplos de uso:**
+```bash
+# Por serviço
+curl -X POST http://localhost:8082/tools/get_related_incidents \
+  -d '{"arguments": {"application_service": "rundeck-hom"}}'
+
+# Por capability
+curl -X POST http://localhost:8082/tools/get_related_incidents \
+  -d '{"arguments": {"business_capability": "corporate-services"}}'
+
+# Por squad
+curl -X POST http://localhost:8082/tools/get_related_incidents \
+  -d '{"arguments": {"owner_squad": "l-sre-observability"}}'
+
+# Combinado (AND)
+curl -X POST http://localhost:8082/tools/get_related_incidents \
+  -d '{"arguments": {"application_service": "rundeck-hom", "owner_squad": "l-sre-observability"}}'
+```
+
 **Logs:**
 ```
-[get_related_incidents] Priority search: description field for Grafana labels
-[get_related_incidents] Found 12 incidents by description (priority)
+[get_related_incidents] Starting search | label_filters={'application_service': 'rundeck-hom', 'owner_squad': 'l-sre-observability'} | time_window=24h
+[get_related_incidents] Priority search: Grafana labels in description field | conditions=2
+[get_related_incidents] Found 8 incidents by Grafana labels (priority)
 [get_related_incidents] Fallback search: cmdb_ci_name field
-[get_related_incidents] Found 5 incidents by cmdb_ci_name (3 unique after dedup)
-[get_related_incidents] Search completed | by_description=12 | by_ci=3 | total=15
+[get_related_incidents] Found 3 incidents by cmdb_ci_name (2 unique after dedup)
+[get_related_incidents] Search completed | by_description=8 | by_ci=2 | total=10
 ```
 
 ---
@@ -82,11 +99,7 @@ WHERE (
 
 3. **PRIORIDADE:** Buscar por `application_service` extraído do `description`
    ```sql
-   WHERE (
-       i.description ILIKE '%application_service=rundeck-hom%'
-       OR i.description ILIKE '%instance=rundeck-hom%'
-       OR i.description ILIKE '%CI:rundeck-hom%'
-   )
+   WHERE i.description ILIKE '%- application_service=rundeck-hom%'
    AND i.opened_at BETWEEN ... AND ...
    ```
 
@@ -113,16 +126,28 @@ O campo `description` contém o corpo do alerta Grafana com labels no formato:
 Labels:
 - alertname=Utilização de Disco acima de 70%
 - application_service=rundeck-hom
-- instance=rundeck-hom
 - business_capability=corporate-services
-- CI:rundeck-hom
+- business_domain=corporate-platform
+- business_service=corporate-hub
+- owner_squad=l-sre-observability
+- owner_sre=l-sre-observability
+- job=tempo-distributor
+- k8s_cluster=eks-observability-01-use2-hom
 ```
 
 ### Padrões Buscados
 
-1. **`application_service=<valor>`** - Label direto do Grafana
-2. **`instance=<valor>`** - Label alternativo (muitas vezes igual ao application_service)
-3. **`CI:<valor>`** - Formato do ServiceNow no description
+1. **`- application_service=<valor>`** - Label estruturada do Grafana (busca exata)
+2. Outras labels disponíveis para correlação:
+   - `- business_capability=<valor>`
+   - `- business_domain=<valor>`
+   - `- business_service=<valor>`
+   - `- owner_squad=<valor>`
+   - `- owner_sre=<valor>`
+   - `- job=<valor>`
+   - `- k8s_cluster=<valor>`
+
+**IMPORTANTE**: A busca é feita no bloco `Labels:` estruturado, não em campos livres como `CI:` que podem ter inconsistências.
 
 ### Função `parse_description()`
 
@@ -163,10 +188,13 @@ Todas as buscas retornam:
 ## Benefícios
 
 1. ✅ **Maior cobertura:** Encontra incidentes mesmo quando `cmdb_ci_name` está vazio
-2. ✅ **Correlação precisa:** Usa os mesmos labels que o Grafana envia
-3. ✅ **Deduplicação automática:** Remove duplicatas entre as buscas
-4. ✅ **Logs detalhados:** Rastreamento completo de cada busca
-5. ✅ **Performance:** Busca prioritária retorna até 100 resultados, fallback até 50
+2. ✅ **Correlação precisa:** Usa as mesmas labels estruturadas que o Grafana envia
+3. ✅ **Sem inconsistências:** Busca no bloco `Labels:` estruturado, não em campos livres como `CI:`
+4. ✅ **Deduplicação automática:** Remove duplicatas entre as buscas
+5. ✅ **Logs detalhados:** Rastreamento completo de cada busca
+6. ✅ **Performance:** Busca prioritária retorna até 100 resultados, fallback até 50
+7. ✅ **Múltiplas labels:** Suporte para `application_service`, `business_capability`, `business_domain`, `business_service`, `owner_squad`, `owner_sre`
+8. ✅ **Filtros combinados (AND):** Múltiplas labels podem ser combinadas para busca mais precisa
 
 ---
 
@@ -186,7 +214,7 @@ curl -X POST http://localhost:8080/investigate \
 
 **Resultado esperado:**
 - Busca alertas do Grafana com `application_service=rundeck-hom`
-- Busca incidentes no `description` com `application_service=rundeck-hom`
+- Busca incidentes no bloco `Labels:` do `description` com `- application_service=rundeck-hom`
 - Busca incidentes no `cmdb_ci_name` com `rundeck-hom` (fallback)
 - Retorna todos os incidentes encontrados nas últimas 24h
 
@@ -197,13 +225,22 @@ curl -X POST http://localhost:8080/investigate \
 Os logs mostram claramente a estratégia de busca:
 
 ```
-[get_related_incidents] Priority search: description field for Grafana labels
-[get_related_incidents] Found 12 incidents by description (priority)
-[get_related_incidents] Fallback search: cmdb_ci_name field  
+[get_related_incidents] Starting search | label_filters={'application_service': 'rundeck-hom'} | time_window=24h
+[get_related_incidents] Priority search: Grafana labels in description field | conditions=1
+[get_related_incidents] Found 12 incidents by Grafana labels (priority)
+[get_related_incidents] Fallback search: cmdb_ci_name field
 [get_related_incidents] Found 5 incidents by cmdb_ci_name (3 unique after dedup)
 [get_related_incidents] Search completed | by_description=12 | by_ci=3 | total=15
 ```
 
+Busca com múltiplas labels:
+```
+[get_related_incidents] Starting search | label_filters={'business_capability': 'corporate-services', 'owner_squad': 'l-sre-observability'} | time_window=24h
+[get_related_incidents] Priority search: Grafana labels in description field | conditions=2
+[get_related_incidents] Found 5 incidents by Grafana labels (priority)
+[get_related_incidents] Search completed | by_description=5 | by_ci=0 | total=5
+```
+
 Se `by_description=0` e `by_ci=0`, significa que:
-- Não há incidentes com esse `application_service` nas últimas 24h, OU
-- O formato do `description` mudou e precisa ser ajustado
+- Não há incidentes com essas labels nas últimas 24h, OU
+- O formato do bloco `Labels:` no `description` mudou e precisa ser ajustado

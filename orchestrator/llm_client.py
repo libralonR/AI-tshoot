@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 from openai import AsyncOpenAI
 from pathlib import Path
 
+from metrics import LLM_CALL_DURATION, LLM_CALL_TOTAL, LLM_TOKENS, LLM_TOOL_CALLS
+
 log = logging.getLogger("orchestrator")
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -134,7 +136,7 @@ AVAILABLE_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_related_incidents",
-            "description": "Find incidents related to a specific incident (same CI or parent_incident) or service.",
+            "description": "Find incidents related to a specific incident or service. Supports filtering by multiple Grafana labels in the description field.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -145,6 +147,26 @@ AVAILABLE_TOOLS = [
                     "application_service": {
                         "type": "string",
                         "description": "Service name to find related incidents",
+                    },
+                    "business_capability": {
+                        "type": "string",
+                        "description": "Business capability to filter incidents (searches Grafana labels in description)",
+                    },
+                    "business_domain": {
+                        "type": "string",
+                        "description": "Business domain to filter incidents",
+                    },
+                    "business_service": {
+                        "type": "string",
+                        "description": "Business service to filter incidents",
+                    },
+                    "owner_squad": {
+                        "type": "string",
+                        "description": "Owner squad to filter incidents",
+                    },
+                    "owner_sre": {
+                        "type": "string",
+                        "description": "Owner SRE to filter incidents",
                     },
                     "time_window_hours": {
                         "type": "integer",
@@ -204,6 +226,151 @@ AVAILABLE_TOOLS = [
                     },
                 },
                 "required": ["dashboardUID", "panelId"],
+            },
+        },
+    },
+    # ------------------------------------------------------------------
+    # VictoriaMetrics MCP tools (via vm_mcp_proxy)
+    # ------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "query",
+            "description": "Execute an instant PromQL/MetricsQL query against VictoriaMetrics. Returns current metric values.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "PromQL or MetricsQL expression (e.g. 'up', 'rate(http_requests_total[5m])')",
+                    },
+                    "time": {
+                        "type": "string",
+                        "description": "Evaluation timestamp (ISO 8601 or epoch ms). Defaults to now.",
+                    },
+                    "step": {
+                        "type": "string",
+                        "description": "Lookback interval for raw samples (e.g. '5m'). Default: 5m.",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_range",
+            "description": "Execute a range PromQL/MetricsQL query over a time period. Returns time series data.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "PromQL or MetricsQL expression",
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "Start timestamp (ISO 8601 or epoch ms)",
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "End timestamp (ISO 8601 or epoch ms). Defaults to now.",
+                    },
+                    "step": {
+                        "type": "string",
+                        "description": "Query resolution step (e.g. '1m', '5m', '1h')",
+                    },
+                },
+                "required": ["query", "start"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "metrics",
+            "description": "List available metric names in VictoriaMetrics. Optionally filter by pattern.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "match": {
+                        "type": "string",
+                        "description": "Optional series selector to filter metrics (e.g. '{job=\"prometheus\"}')",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max number of metrics to return",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "labels",
+            "description": "List available label names in VictoriaMetrics.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "match": {
+                        "type": "string",
+                        "description": "Optional series selector to filter labels",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "label_values",
+            "description": "List values for a specific label in VictoriaMetrics.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "description": "Label name to get values for (e.g. 'job', 'instance', '__name__')",
+                    },
+                    "match": {
+                        "type": "string",
+                        "description": "Optional series selector to filter",
+                    },
+                },
+                "required": ["label"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "alerts",
+            "description": "View current alerts (firing and pending) from VictoriaMetrics/vmalert.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tsdb_status",
+            "description": "View TSDB cardinality statistics from VictoriaMetrics. Shows top series, labels, and label values by cardinality.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topN": {
+                        "type": "integer",
+                        "description": "Number of top entries to return (default: 10)",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Date for cardinality stats (YYYY-MM-DD). Defaults to today.",
+                    },
+                },
             },
         },
     },
@@ -310,10 +477,19 @@ class LLMClient:
                 f"finish_reason={response.choices[0].finish_reason} | "
                 f"usage={response.usage.model_dump() if response.usage else 'N/A'}"
             )
+            # Record LLM metrics
+            LLM_CALL_DURATION.labels(model=self.model, status="success").observe(api_time)
+            LLM_CALL_TOTAL.labels(model=self.model, status="success").inc()
+            if response.usage:
+                LLM_TOKENS.labels(model=self.model, type="prompt_tokens").inc(response.usage.prompt_tokens or 0)
+                LLM_TOKENS.labels(model=self.model, type="completion_tokens").inc(response.usage.completion_tokens or 0)
+                LLM_TOKENS.labels(model=self.model, type="total_tokens").inc(response.usage.total_tokens or 0)
         except Exception as e:
             api_time = time.time() - start_time
             error_type = type(e).__name__
             error_msg = str(e)
+            LLM_CALL_DURATION.labels(model=self.model, status="error").observe(api_time)
+            LLM_CALL_TOTAL.labels(model=self.model, status="error").inc()
             
             # Identificar tipo específico de erro
             if "ConnectTimeout" in error_type or "ConnectError" in error_type:
@@ -383,6 +559,7 @@ class LLMClient:
                     try:
                         tool_result = await tool_executor(fn_name, fn_args)
                         tool_time = time.time() - tool_start
+                        LLM_TOOL_CALLS.labels(tool=fn_name, status="success").inc()
                         log.info(
                             f"[LLMClient.chat] Tool execution completed | "
                             f"tool={fn_name} | "
@@ -391,6 +568,7 @@ class LLMClient:
                         )
                     except Exception as e:
                         tool_time = time.time() - tool_start
+                        LLM_TOOL_CALLS.labels(tool=fn_name, status="error").inc()
                         log.error(
                             f"[LLMClient.chat] Tool execution failed | "
                             f"tool={fn_name} | "
@@ -442,10 +620,18 @@ class LLMClient:
                     f"finish_reason={response.choices[0].finish_reason} | "
                     f"usage={response.usage.model_dump() if response.usage else 'N/A'}"
                 )
+                LLM_CALL_DURATION.labels(model=self.model, status="success").observe(api_time)
+                LLM_CALL_TOTAL.labels(model=self.model, status="success").inc()
+                if response.usage:
+                    LLM_TOKENS.labels(model=self.model, type="prompt_tokens").inc(response.usage.prompt_tokens or 0)
+                    LLM_TOKENS.labels(model=self.model, type="completion_tokens").inc(response.usage.completion_tokens or 0)
+                    LLM_TOKENS.labels(model=self.model, type="total_tokens").inc(response.usage.total_tokens or 0)
             except Exception as e:
                 api_time = time.time() - start_time
                 error_type = type(e).__name__
                 error_msg = str(e)
+                LLM_CALL_DURATION.labels(model=self.model, status="error").observe(api_time)
+                LLM_CALL_TOTAL.labels(model=self.model, status="error").inc()
                 
                 # Identificar tipo específico de erro
                 if "ConnectTimeout" in error_type or "ConnectError" in error_type:

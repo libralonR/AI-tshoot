@@ -19,12 +19,26 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from agents import GrafanaAgent, IncidentsAgent
+from agents import GrafanaAgent, IncidentsAgent, MetricsAgent
 from config import config
 from correlation import CorrelationEngine
 from guardrails import Guardrails
 from hypothesis import HypothesisGenerator
 from mcp_client import MCPClient
+from metrics import (
+    INVESTIGATION_DURATION,
+    INVESTIGATION_TOTAL,
+    EVIDENCE_COUNT,
+    HYPOTHESIS_COUNT,
+    CORRELATION_GAPS,
+    MCP_CALL_DURATION,
+    MCP_CALL_TOTAL,
+    CHAT_DURATION,
+    CHAT_TOTAL,
+    CHAT_SESSIONS_ACTIVE,
+    LLM_TOOL_CALLS,
+    PII_REDACTIONS,
+)
 from models import (
     AuditEntry,
     CaseFile,
@@ -61,11 +75,14 @@ class Orchestrator:
         self.correlation_engine = CorrelationEngine(
             config.standard_labels, config.label_aliases
         )
-        self.hypothesis_generator = HypothesisGenerator()
+        self.hypothesis_generator = HypothesisGenerator(
+            metrics_catalog=config.metrics_catalog
+        )
         self.guardrails = Guardrails()
 
     async def investigate(self, input_data: Input, filters: dict = None) -> CaseFile:
         start_time = time.time()
+        status = "success"
         
         log.info(
             f"[investigate] Starting investigation | "
@@ -75,70 +92,87 @@ class Orchestrator:
             f"filters={filters}"
         )
 
-        if not self._validate_input(input_data):
-            log.error(f"[investigate] Invalid input: type={input_data.type}, value={input_data.value}")
-            raise ValueError(f"Invalid input: {input_data}")
+        try:
+            if not self._validate_input(input_data):
+                log.error(f"[investigate] Invalid input: type={input_data.type}, value={input_data.value}")
+                status = "invalid_input"
+                raise ValueError(f"Invalid input: {input_data}")
 
-        case_file = self._create_case_file(input_data)
-        log.debug(f"[investigate] Created case_file: {case_file.id}")
-        
-        log.info(f"[investigate] Determining scope and time window...")
-        await self._determine_scope_and_time_window(case_file, filters)
-        log.info(
-            f"[investigate] Scope determined | "
-            f"serviceName={case_file.scope.serviceName} | "
-            f"environment={case_file.scope.environment} | "
-            f"additionalLabels={list((case_file.scope.additionalLabels or {}).keys())}"
-        )
-
-        log.info(f"[investigate] Gathering signals from MCP servers...")
-        evidence_list = await self._gather_signals(case_file)
-        log.info(f"[investigate] Gathered {len(evidence_list)} evidence items")
-
-        log.info(f"[investigate] Correlating signals...")
-        correlated_evidence, gaps = self.correlation_engine.correlate_signals(
-            evidence_list, case_file.scope
-        )
-        case_file.evidence = correlated_evidence
-        case_file.correlationGaps = gaps
-        log.info(
-            f"[investigate] Correlation complete | "
-            f"evidence={len(correlated_evidence)} | "
-            f"gaps={len(gaps)}"
-        )
-
-        log.info(f"[investigate] Generating hypotheses...")
-        case_file.hypotheses = self.hypothesis_generator.generate_hypotheses(
-            correlated_evidence, case_file.scope
-        )
-        log.info(f"[investigate] Generated {len(case_file.hypotheses)} hypotheses")
-
-        log.info(f"[investigate] Applying guardrails...")
-        self._apply_guardrails(case_file)
-
-        execution_time = time.time() - start_time
-        case_file.auditTrail.append(
-            AuditEntry(
-                timestamp=datetime.utcnow().isoformat(),
-                action="Investigation completed",
-                details={
-                    "evidence_count": len(case_file.evidence),
-                    "hypotheses_count": len(case_file.hypotheses),
-                    "execution_time": execution_time,
-                },
+            case_file = self._create_case_file(input_data)
+            log.debug(f"[investigate] Created case_file: {case_file.id}")
+            
+            log.info(f"[investigate] Determining scope and time window...")
+            await self._determine_scope_and_time_window(case_file, filters)
+            log.info(
+                f"[investigate] Scope determined | "
+                f"serviceName={case_file.scope.serviceName} | "
+                f"environment={case_file.scope.environment} | "
+                f"additionalLabels={list((case_file.scope.additionalLabels or {}).keys())}"
             )
-        )
-        case_file.updatedAt = datetime.utcnow().isoformat()
-        
-        log.info(
-            f"[investigate] Investigation completed | "
-            f"case_file_id={case_file.id} | "
-            f"execution_time={execution_time:.3f}s | "
-            f"evidence={len(case_file.evidence)} | "
-            f"hypotheses={len(case_file.hypotheses)}"
-        )
-        
-        return case_file
+
+            log.info(f"[investigate] Gathering signals from MCP servers...")
+            evidence_list = await self._gather_signals(case_file)
+            log.info(f"[investigate] Gathered {len(evidence_list)} evidence items")
+
+            log.info(f"[investigate] Correlating signals...")
+            correlated_evidence, gaps = self.correlation_engine.correlate_signals(
+                evidence_list, case_file.scope
+            )
+            case_file.evidence = correlated_evidence
+            case_file.correlationGaps = gaps
+            CORRELATION_GAPS.inc(len(gaps))
+            log.info(
+                f"[investigate] Correlation complete | "
+                f"evidence={len(correlated_evidence)} | "
+                f"gaps={len(gaps)}"
+            )
+
+            log.info(f"[investigate] Generating hypotheses...")
+            case_file.hypotheses = self.hypothesis_generator.generate_hypotheses(
+                correlated_evidence, case_file.scope
+            )
+            log.info(f"[investigate] Generated {len(case_file.hypotheses)} hypotheses")
+
+            log.info(f"[investigate] Applying guardrails...")
+            self._apply_guardrails(case_file)
+
+            execution_time = time.time() - start_time
+            case_file.auditTrail.append(
+                AuditEntry(
+                    timestamp=datetime.utcnow().isoformat(),
+                    action="Investigation completed",
+                    details={
+                        "evidence_count": len(case_file.evidence),
+                        "hypotheses_count": len(case_file.hypotheses),
+                        "execution_time": execution_time,
+                    },
+                )
+            )
+            case_file.updatedAt = datetime.utcnow().isoformat()
+            
+            # Record metrics
+            EVIDENCE_COUNT.labels(input_type=input_data.type).observe(len(case_file.evidence))
+            HYPOTHESIS_COUNT.labels(input_type=input_data.type).observe(len(case_file.hypotheses))
+            
+            log.info(
+                f"[investigate] Investigation completed | "
+                f"case_file_id={case_file.id} | "
+                f"execution_time={execution_time:.3f}s | "
+                f"evidence={len(case_file.evidence)} | "
+                f"hypotheses={len(case_file.hypotheses)}"
+            )
+            
+            return case_file
+
+        except Exception:
+            if status == "success":
+                status = "error"
+            raise
+
+        finally:
+            duration = time.time() - start_time
+            INVESTIGATION_DURATION.labels(input_type=input_data.type, status=status).observe(duration)
+            INVESTIGATION_TOTAL.labels(input_type=input_data.type, status=status).inc()
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -302,8 +336,10 @@ class Orchestrator:
 
         grafana_client = MCPClient("grafana", config.mcp_servers["grafana"].endpoint)
         incidents_client = MCPClient("incidents-pg", config.mcp_servers["incidents-pg"].endpoint)
+        vm_client = MCPClient("victoriametrics", config.mcp_servers["victoriametrics"].endpoint, timeout=30)
         grafana_agent = GrafanaAgent(grafana_client)
         incidents_agent = IncidentsAgent(incidents_client)
+        metrics_agent = MetricsAgent(vm_client)
 
         try:
             # Always fetch firing alerts
@@ -339,6 +375,25 @@ class Orchestrator:
                     f"incident_number={inc_number}"
                 )
 
+            # Fetch metrics from VictoriaMetrics if we have a service name
+            if ci_name and config.metrics_catalog:
+                log.info(
+                    f"[_gather_signals] Fetching catalog metrics from VictoriaMetrics | "
+                    f"service={ci_name} | "
+                    f"catalog_queries={len(config.metrics_catalog)}"
+                )
+                tasks.append(
+                    metrics_agent.execute_catalog_queries(ci_name, config.metrics_catalog)
+                )
+
+            # Execute alert expression if we have alert data
+            alert_data = self._extract_alert_data(case_file)
+            if alert_data:
+                log.info(f"[_gather_signals] Executing alert PromQL expression from alert data")
+                tasks.append(
+                    metrics_agent.execute_alert_expression(alert_data)
+                )
+
             log.info(f"[_gather_signals] Executing {len(tasks)} parallel tasks...")
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
@@ -364,6 +419,7 @@ class Orchestrator:
         finally:
             await grafana_client.close()
             await incidents_client.close()
+            await vm_client.close()
 
         execution_time = time.time() - start_time
         log.info(
@@ -373,6 +429,17 @@ class Orchestrator:
         )
         
         return evidence_list
+
+    def _extract_alert_data(self, case_file: CaseFile) -> Optional[Dict]:
+        """Extrai dados do alerta do CaseFile para executar a expressão PromQL."""
+        if case_file.input.type != InputType.ALERT_UID:
+            return None
+        for evidence in case_file.evidence:
+            if evidence.source == "grafana-mcp" and evidence.type == EvidenceType.ALERT_FIRING:
+                result = evidence.result
+                if "data" in result:
+                    return result
+        return None
 
     def _apply_guardrails(self, case_file: CaseFile):
         for evidence in case_file.evidence:
@@ -391,7 +458,15 @@ class Orchestrator:
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "orchestrator", "version": "1.0.0"}
+    return {"status": "healthy", "service": "orchestrator", "version": "1.1.0"}
+
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    """Prometheus metrics endpoint."""
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    from starlette.responses import Response
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/steering")
@@ -466,6 +541,10 @@ async def _execute_tool(tool_name: str, arguments: dict) -> dict:
     
     grafana_tools = {"find_firing_alerts", "get_alert_details", "find_dashboards", "get_panel_link"}
     incidents_tools = {"get_incident", "search_incidents", "get_related_incidents", "get_incident_stats"}
+    vm_tools = {"query", "query_range", "metrics", "labels", "label_values", "series",
+                "rules", "alerts", "tsdb_status", "top_queries", "active_queries",
+                "metric_statistics", "documentation", "prettify_query", "explain_query",
+                "metrics_metadata", "tenants"}
     
     if tool_name in grafana_tools:
         server_name = "grafana"
@@ -476,6 +555,11 @@ async def _execute_tool(tool_name: str, arguments: dict) -> dict:
         server_name = "incidents-pg"
         endpoint = config.mcp_servers["incidents-pg"].endpoint
         log.debug(f"[_execute_tool] Routing to Incidents PG MCP | endpoint={endpoint}")
+        client = MCPClient(server_name, endpoint)
+    elif tool_name in vm_tools:
+        server_name = "victoriametrics"
+        endpoint = config.mcp_servers["victoriametrics"].endpoint
+        log.debug(f"[_execute_tool] Routing to VictoriaMetrics MCP Proxy | endpoint={endpoint}")
         client = MCPClient(server_name, endpoint)
     else:
         log.error(f"[_execute_tool] Unknown tool: {tool_name}")
@@ -489,8 +573,12 @@ async def _execute_tool(tool_name: str, arguments: dict) -> dict:
         from guardrails import Guardrails
         result_str, redacted = Guardrails.redact_pii(json.dumps(result, default=str))
         result = json.loads(result_str)
+        if redacted:
+            PII_REDACTIONS.inc()
         
         execution_time = time.time() - start_time
+        MCP_CALL_DURATION.labels(server=server_name, tool=tool_name, status="success").observe(execution_time)
+        MCP_CALL_TOTAL.labels(server=server_name, tool=tool_name, status="success").inc()
         log.info(
             f"[_execute_tool] Tool execution completed | "
             f"tool={tool_name} | "
@@ -503,6 +591,8 @@ async def _execute_tool(tool_name: str, arguments: dict) -> dict:
         return result
     except Exception as e:
         execution_time = time.time() - start_time
+        MCP_CALL_DURATION.labels(server=server_name, tool=tool_name, status="error").observe(execution_time)
+        MCP_CALL_TOTAL.labels(server=server_name, tool=tool_name, status="error").inc()
         log.error(
             f"[_execute_tool] Tool execution failed | "
             f"tool={tool_name} | "
@@ -550,6 +640,7 @@ async def chat_endpoint(request: ChatRequest):
         log.info(f"[chat_endpoint] Creating new LLM session | session_id={session_id}")
         try:
             _chat_sessions[session_id] = LLMClient()
+            CHAT_SESSIONS_ACTIVE.inc()
             log.info(f"[chat_endpoint] LLM session created | session_id={session_id}")
         except Exception as e:
             log.error(
@@ -575,6 +666,8 @@ async def chat_endpoint(request: ChatRequest):
         )
         
         execution_time = time.time() - start_time
+        CHAT_DURATION.labels(status="success").observe(execution_time)
+        CHAT_TOTAL.labels(status="success").inc()
         log.info(
             f"[chat_endpoint] Chat completed successfully | "
             f"session_id={session_id} | "
@@ -585,6 +678,8 @@ async def chat_endpoint(request: ChatRequest):
         return ChatResponse(response=response_text, session_id=session_id)
     except Exception as e:
         execution_time = time.time() - start_time
+        CHAT_DURATION.labels(status="error").observe(execution_time)
+        CHAT_TOTAL.labels(status="error").inc()
         log.error(
             f"[chat_endpoint] Chat failed | "
             f"session_id={session_id} | "

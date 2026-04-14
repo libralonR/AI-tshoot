@@ -51,6 +51,22 @@ Gera link direto para um painel com time range.
 - `Panel URL`: Link direto para o painel
 - `Silence URL`: Link para silenciar (contém alert_rule_uid)
 
+## Metadados ServiceNow (no campo `servicenow` do alerta normalizado)
+
+O campo `annotations.description` do alerta contém um JSON com metadados do ServiceNow.
+O MCP server parseia automaticamente e retorna no campo `servicenow`:
+
+- `kb`: ID do artigo KB (ex: `KB0001718`)
+- `kb_link`: Link direto para o artigo no ServiceNow (quando `SERVICENOW_URL` está configurado)
+- `ci`: Configuration Item
+- `impact`: Impacto (1-4)
+- `urgency`: Urgência (1-4)
+- `group`: Grupo de atribuição
+- `business_service`: Serviço de negócio
+- `short_description`: Descrição curta para abertura de incidente
+
+**Regra**: Se o alerta tem `servicenow.kb_link`, SEMPRE inclua na resposta.
+
 ## Regras
 
 - Sempre extrair `application_service` dos labels para correlação

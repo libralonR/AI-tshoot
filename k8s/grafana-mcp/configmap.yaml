@@ -19,3 +19,7 @@ data:
   # Optional: Skip TLS verification (default: false)
   # Use "true" only for development/testing
   grafana-insecure-skip-verify: "false"
+  
+  # ServiceNow URL para montar links de KB articles
+  # Formato do link: <url>/nav_to.do?uri=%2Fkb_view.do%3Fsysparm_article%3D<KB_ID>
+  servicenow-url: "https://your-instance.service-now.com"

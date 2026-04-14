@@ -34,9 +34,9 @@ class Config:
             "victoriametrics": MCPServerConfig(
                 endpoint=os.getenv(
                     "VM_MCP_ENDPOINT",
-                    "http://vm-mcp-server.observability.svc.cluster.local:8080",
+                    "http://vm-mcp-proxy.observability.svc.cluster.local:8084",
                 ),
-                timeout=15,
+                timeout=30,
             ),
             "splunk": MCPServerConfig(
                 endpoint=os.getenv(
@@ -99,6 +99,7 @@ class Config:
         }
 
         self.steering_context = self._load_steering()
+        self.metrics_catalog = self._load_metrics_catalog()
 
     def _load_steering(self) -> Dict[str, str]:
         context = {}
@@ -107,6 +108,36 @@ class Config:
                 context[f.stem] = f.read_text()
                 log.info(f"Loaded steering file: {f.name}")
         return context
+
+    def _load_metrics_catalog(self) -> list:
+        """Carrega o catálogo de queries do steering file metrics-catalog.md.
+
+        Parseia blocos YAML dentro do markdown e retorna lista de dicts
+        com name, category, query_template, description.
+        """
+        import re
+        import yaml
+
+        catalog_file = STEERING_DIR / "metrics-catalog.md"
+        if not catalog_file.exists():
+            log.warning("metrics-catalog.md not found in steering dir")
+            return []
+
+        content = catalog_file.read_text()
+        entries = []
+
+        # Extrair blocos yaml do markdown
+        yaml_blocks = re.findall(r"```yaml\s*\n(.*?)```", content, re.DOTALL)
+        for block in yaml_blocks:
+            try:
+                parsed = yaml.safe_load(block)
+                if isinstance(parsed, list):
+                    entries.extend(parsed)
+            except Exception as e:
+                log.warning(f"Failed to parse YAML block in metrics-catalog.md: {e}")
+
+        log.info(f"Loaded {len(entries)} queries from metrics-catalog.md")
+        return entries
 
 
 config = Config()

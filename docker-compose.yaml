@@ -23,6 +23,7 @@ services:
       - GRAFANA_INSECURE_SKIP_VERIFY=false
       - MCP_SERVER_MODE=sse
       - MCP_LISTEN_PORT=8080
+      - SERVICENOW_URL=${SERVICENOW_URL:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8080/health')"]
@@ -57,23 +58,47 @@ services:
 #      retries: 3
 
   # ============================================================
-  # VictoriaMetrics MCP Server
-  # Pré-requisito: buildar a imagem antes (ver k8s/vm-mcp/Makefile)
+  # VictoriaMetrics MCP Server (Go binary)
   # ============================================================
 #  vm-mcp:
-#    image: ${VM_MCP_IMAGE:-vm-mcp-server:local}
+#    image: ${VM_MCP_IMAGE:-ghcr.io/victoriametrics/mcp-victoriametrics:latest}
 #    ports:
 #      - "8083:8080"
 #    environment:
 #      - VM_INSTANCE_ENTRYPOINT=${VM_INSTANCE_ENTRYPOINT:-http://host.docker.internal:8428}
 #      - VM_INSTANCE_TYPE=${VM_INSTANCE_TYPE:-single}
 #      - VM_INSTANCE_BEARER_TOKEN=${VM_INSTANCE_BEARER_TOKEN:-}
-#      - MCP_SERVER_MODE=http
+#      - MCP_SERVER_MODE=sse
 #      - MCP_LISTEN_ADDR=:8080
 #      - MCP_DISABLED_TOOLS=export,flags,metric_relabel_debug,downsampling_filters_debug,retention_filters_debug,test_rules
 #    restart: unless-stopped
 #    healthcheck:
 #      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health/liveness"]
+#      interval: 30s
+#      timeout: 5s
+#      retries: 3
+
+  # ============================================================
+  # VictoriaMetrics MCP Proxy (REST adapter)
+  # Traduz REST /tools/{name} → MCP SSE protocol
+  # ============================================================
+#  vm-mcp-proxy:
+#    build:
+#      context: .
+#      dockerfile: k8s/vm-mcp/Dockerfile.proxy
+#    image: vm-mcp-proxy:local
+#    ports:
+#      - "8084:8084"
+#    environment:
+#      - VM_MCP_UPSTREAM=http://vm-mcp:8080
+#      - VM_MCP_MODE=sse
+#      - PROXY_LISTEN_PORT=8084
+#      - PROXY_TIMEOUT=30
+#    depends_on:
+#      - vm-mcp
+#    restart: unless-stopped
+#    healthcheck:
+#      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8084/health')"]
 #      interval: 30s
 #      timeout: 5s
 #      retries: 3
@@ -89,7 +114,7 @@ services:
       - PORT=8080
       - GRAFANA_MCP_ENDPOINT=http://grafana-mcp:8080
       - INCIDENTS_PG_MCP_ENDPOINT=http://incidents-pg-mcp:8080
-      - VM_MCP_ENDPOINT=http://vm-mcp:8080
+      - VM_MCP_ENDPOINT=http://vm-mcp-proxy:8084
       - SPLUNK_MCP_ENDPOINT=http://localhost:9999
       - TEMPO_MCP_ENDPOINT=http://localhost:9999
       - ATHENA_MCP_ENDPOINT=http://localhost:9999

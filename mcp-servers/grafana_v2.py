@@ -322,6 +322,22 @@ async def call_tool(name: str, arguments: dict) -> list[dict]:
             for alert in alerts:
                 alert_labels = alert.get("labels", {})
                 alert_annotations = alert.get("annotations", {})
+
+                # Parsear description das annotations (JSON stringificado com metadados do ServiceNow)
+                snow_meta = {}
+                kb_link = None
+                desc_raw = alert_annotations.get("description", "")
+                if desc_raw:
+                    try:
+                        snow_meta = json.loads(desc_raw)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                if snow_meta.get("kb"):
+                    snow_base = os.getenv("SERVICENOW_URL", "").rstrip("/")
+                    if snow_base:
+                        kb_link = f"{snow_base}/nav_to.do?uri=%2Fkb_view.do%3Fsysparm_article%3D{snow_meta['kb']}"
+
                 normalized = {
                     "fingerprint": alert.get("fingerprint"),
                     "status": alert.get("status", {}),
@@ -350,6 +366,17 @@ async def call_tool(name: str, arguments: dict) -> list[dict]:
                         "origin": alert_annotations.get("Origin"),
                         "panel_url": alert_annotations.get("Panel URL"),
                         "silence_url": alert_annotations.get("Silence URL"),
+                    },
+                    # Metadados ServiceNow extraídos do description (JSON)
+                    "servicenow": {
+                        "kb": snow_meta.get("kb"),
+                        "kb_link": kb_link,
+                        "ci": snow_meta.get("ci"),
+                        "impact": snow_meta.get("impact"),
+                        "urgency": snow_meta.get("urgency"),
+                        "group": snow_meta.get("group"),
+                        "business_service": snow_meta.get("business_service"),
+                        "short_description": snow_meta.get("short_description"),
                     },
                 }
                 normalized_alerts.append(normalized)

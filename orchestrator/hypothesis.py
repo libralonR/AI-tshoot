@@ -1,13 +1,16 @@
 """Hypothesis generation and ranking."""
 
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from models import Evidence, EvidenceType, Hypothesis, NextStep, Priority, Scope
 
 
 class HypothesisGenerator:
     """Generate and rank hypotheses from correlated evidence."""
+
+    def __init__(self, metrics_catalog: List[Dict[str, str]] = None):
+        self.metrics_catalog = metrics_catalog or []
 
     def generate_hypotheses(self, evidence_list: List[Evidence], scope: Scope) -> List[Hypothesis]:
         hypotheses = []
@@ -71,49 +74,155 @@ class HypothesisGenerator:
             return "Resource saturation or application error causing failures"
         if EvidenceType.TRACE_ERROR in types and EvidenceType.LOG_ERROR in types:
             return "Application error with distributed trace evidence"
+        if EvidenceType.ALERT_FIRING in types and EvidenceType.METRIC_ANOMALY in types:
+            return "Alert threshold breached with metric anomaly confirmed"
         if EvidenceType.ALERT_FIRING in types:
             return "Alert threshold breached, requires investigation"
+        if EvidenceType.METRIC_ANOMALY in types:
+            return "Metric anomaly detected"
         if EvidenceType.LOG_ERROR in types:
             return "Error pattern detected in logs"
         return "Anomaly detected, requires further investigation"
 
     def _generate_next_steps(self, component: str, evidences: List[Evidence]) -> List[NextStep]:
-        steps = [
-            NextStep(
-                action="Check resource metrics",
-                description=f"Review CPU, memory, and network metrics for {component}",
-                query=f'rate(container_cpu_usage_seconds_total{{pod=~"{component}.*"}}[5m])',
-                readOnly=True,
-                priority=Priority.HIGH,
+        steps: List[NextStep] = []
+
+        # 1. KB link do ServiceNow (se disponível no alerta)
+        kb_link = self._extract_kb_link(evidences)
+        if kb_link:
+            kb_id = kb_link.get("kb", "")
+            steps.append(
+                NextStep(
+                    action=f"Consultar KB {kb_id}",
+                    description=f"Artigo de troubleshooting no ServiceNow para {component}",
+                    link=kb_link.get("kb_link"),
+                    readOnly=True,
+                    priority=Priority.HIGH,
+                )
             )
-        ]
+
+        # 2. Golden Signals do catálogo
+        golden_steps = self._golden_signal_steps(component)
+        steps.extend(golden_steps)
+
+        # 3. Infraestrutura do catálogo
+        infra_steps = self._infrastructure_steps(component)
+        steps.extend(infra_steps)
+
+        # 4. Logs (se houver evidência de erro em logs)
         if any(e.type == EvidenceType.LOG_ERROR for e in evidences):
             steps.append(
                 NextStep(
-                    action="Review error logs",
-                    description=f"Examine recent error logs for {component}",
+                    action="Analisar error logs",
+                    description=f"Examinar logs de erro recentes de {component}",
                     query=f'index=app_logs service="{component}" level=ERROR',
                     readOnly=True,
                     priority=Priority.HIGH,
                 )
             )
+
+        # 5. Traces (se houver evidência de trace)
         if any(e.type in [EvidenceType.TRACE_ERROR, EvidenceType.TRACE_SLOW_SPAN] for e in evidences):
             steps.append(
                 NextStep(
-                    action="Analyze traces",
-                    description=f"Review distributed traces for {component}",
+                    action="Analisar traces",
+                    description=f"Revisar traces distribuídos de {component}",
                     query=f'{{service.name="{component}" && status=error}}',
                     readOnly=True,
                     priority=Priority.MEDIUM,
                 )
             )
-        steps.append(
-            NextStep(
-                action="Check recent changes",
-                description=f"Review recent deployments or configuration changes for {component}",
-                link=f"http://servicenow/changes?service={component}",
-                readOnly=True,
-                priority=Priority.MEDIUM,
+
+        return steps
+
+    def _extract_kb_link(self, evidences: List[Evidence]) -> Optional[Dict[str, str]]:
+        """Extrai KB link do ServiceNow das evidências de alertas."""
+        for e in evidences:
+            if e.type == EvidenceType.ALERT_FIRING:
+                snow = e.result.get("servicenow", {})
+                if snow and snow.get("kb_link"):
+                    return snow
+        return None
+
+    def _golden_signal_steps(self, component: str) -> List[NextStep]:
+        """Gera nextSteps baseados nos golden signals do catálogo."""
+        steps = []
+
+        # Agrupar por subcategoria para gerar steps mais úteis
+        latency = [e for e in self.metrics_catalog if e.get("category") == "golden_signal" and "latency" in e.get("name", "")]
+        errors = [e for e in self.metrics_catalog if e.get("category") == "golden_signal" and "error" in e.get("name", "")]
+        traffic = [e for e in self.metrics_catalog if e.get("category") == "golden_signal" and "request_rate" in e.get("name", "")]
+        saturation = [e for e in self.metrics_catalog if e.get("category") == "golden_signal" and e.get("name", "") in ("cpu_usage", "memory_usage", "memory_usage_percent")]
+
+        if errors:
+            entry = errors[0]  # error_rate
+            query = entry["query_template"].replace("{service}", component)
+            steps.append(
+                NextStep(
+                    action="Verificar taxa de erros",
+                    description=f"Error rate HTTP 5xx de {component}",
+                    query=query,
+                    readOnly=True,
+                    priority=Priority.HIGH,
+                )
             )
-        )
+
+        if latency:
+            entry = latency[0]  # request_latency_p99
+            query = entry["query_template"].replace("{service}", component)
+            steps.append(
+                NextStep(
+                    action="Verificar latência P99",
+                    description=f"Latência P99 das requisições de {component}",
+                    query=query,
+                    readOnly=True,
+                    priority=Priority.HIGH,
+                )
+            )
+
+        if traffic:
+            entry = traffic[0]  # request_rate
+            query = entry["query_template"].replace("{service}", component)
+            steps.append(
+                NextStep(
+                    action="Verificar throughput",
+                    description=f"Taxa de requisições por segundo de {component}",
+                    query=query,
+                    readOnly=True,
+                    priority=Priority.MEDIUM,
+                )
+            )
+
+        if saturation:
+            for entry in saturation:
+                query = entry["query_template"].replace("{service}", component)
+                steps.append(
+                    NextStep(
+                        action=f"Verificar {entry.get('description', entry['name'])}",
+                        description=f"{entry.get('description', '')} de {component}",
+                        query=query,
+                        readOnly=True,
+                        priority=Priority.MEDIUM,
+                    )
+                )
+
+        return steps
+
+    def _infrastructure_steps(self, component: str) -> List[NextStep]:
+        """Gera nextSteps de infraestrutura do catálogo."""
+        steps = []
+        infra = [e for e in self.metrics_catalog if e.get("category") == "infrastructure"]
+
+        for entry in infra:
+            query = entry["query_template"].replace("{service}", component)
+            steps.append(
+                NextStep(
+                    action=f"Verificar {entry.get('description', entry['name'])}",
+                    description=f"{entry.get('description', '')} de {component}",
+                    query=query,
+                    readOnly=True,
+                    priority=Priority.MEDIUM,
+                )
+            )
+
         return steps

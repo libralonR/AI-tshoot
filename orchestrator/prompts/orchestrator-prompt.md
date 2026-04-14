@@ -40,7 +40,7 @@ business_capability → business_domain → business_service → application_ser
 
 - Alertas: Grafana (via Grafana MCP) — labels incluem `application_service`, `Severidade`, `owner_squad`
 - Incidentes: PostgreSQL (via Incidents PG MCP) — campo `cmdb_ci_name` = `application_service`
-- Métricas: VictoriaMetrics (futuro)
+- Métricas: VictoriaMetrics (via VM MCP) — PromQL/MetricsQL queries, labels, series, cardinality
 - Logs: Splunk (futuro)
 - Traces: Tempo (futuro)
 
@@ -69,6 +69,17 @@ Regras de formatação:
 - Se houver gaps de correlação, liste no final com ⚠️
 - Para dashboards, use tabela com colunas: nome, pasta, tags, link
 
+## Knowledge Base (KB) Links
+
+Alertas Grafana podem conter um artigo KB no campo `annotations.description` (JSON com campo `kb`).
+Quando presente, o campo `servicenow.kb_link` do alerta normalizado contém o link direto para o artigo no ServiceNow.
+
+**Regras**:
+- Se o alerta tem `servicenow.kb_link`, SEMPRE inclua na resposta como 📖 KB: [KB_ID](link)
+- O link KB é a referência principal para troubleshooting do alerta
+- Inclua o KB link na tabela de alertas ou em seção separada de referências
+- Outros campos úteis do `servicenow`: `ci`, `impact`, `urgency`, `group`
+
 ## Correlação entre fontes
 
 **IMPORTANTE**: O campo `cmdb_ci_name` **nem sempre está preenchido** nos incidentes. A busca de incidentes **prioriza** o campo `description`, que **SEMPRE** contém as labels do alerta Grafana.
@@ -82,15 +93,23 @@ Regras de formatação:
 
 ### Estratégia de Busca de Incidentes
 
-1. **PRIORIDADE**: Buscar no campo `description` por padrões:
-   - `application_service=<valor>`
-   - `instance=<valor>`
-   - `CI:<valor>`
-   - `Fingerprint: <valor>`
+1. **PRIORIDADE**: Buscar no bloco `Labels:` do campo `description`:
+   - Formato: `- application_service=<valor>`
+   - Busca exata nas labels estruturadas do Grafana
+   - **Suporta múltiplas labels como filtro**: `application_service`, `business_capability`, `business_domain`, `business_service`, `owner_squad`, `owner_sre`
+   - Quando múltiplas labels são fornecidas, todas devem estar presentes (AND)
 
-2. **FALLBACK**: Buscar no campo `cmdb_ci_name` (somente se necessário)
+2. **FALLBACK**: Buscar no campo `cmdb_ci_name` (somente se `application_service` foi fornecido)
 
 3. **RESULTADO**: Incidentes agrupados em `by_description` (prioridade), `by_ci` (fallback), `by_parent` (relacionados)
+
+### Exemplos de Busca de Incidentes
+
+- Por serviço: `get_related_incidents(application_service="rundeck-hom")`
+- Por capability: `get_related_incidents(business_capability="corporate-services")`
+- Por squad: `get_related_incidents(owner_squad="l-sre-observability")`
+- Combinado: `get_related_incidents(application_service="rundeck-hom", owner_squad="l-sre-observability")`
+- Por incidente: `get_related_incidents(number="INC0012345")`
 
 ## Confiança
 

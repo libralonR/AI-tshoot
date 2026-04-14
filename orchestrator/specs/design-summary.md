@@ -12,7 +12,7 @@ que consultam fontes de observabilidade via MCP servers (read-only).
 
 1. Input: Incident ID (ServiceNow) / Alert UID (Grafana) / Sintoma livre
 2. Scope: Extrair `application_service`, ambiente, cluster, time window
-3. Coleta paralela: Grafana alerts + Incidentes PG (+ futuro: métricas, logs, traces)
+3. Coleta paralela: Grafana alerts + Incidentes PG + Métricas VictoriaMetrics (catálogo + expressão do alerta)
 4. Correlação: Normalizar labels via alias mapping, agrupar por `application_service`
 5. Hipóteses: Rankear por confidence baseado em evidências cruzadas
 6. Resposta: CaseFile com evidências, hipóteses, gaps e próximos passos
@@ -21,10 +21,10 @@ que consultam fontes de observabilidade via MCP servers (read-only).
 
 - GrafanaAgent: alertas firing, detalhes de alerta, dashboards, panel links
 - IncidentsAgent: busca por número, filtros, relacionados, estatísticas
+- MetricsAgent: queries PromQL/MetricsQL, catálogo de golden signals, execução de expressão de alerta
 
 ## Agents futuros
 
-- MetricsAgent: VictoriaMetrics (PromQL)
 - LogsAgent: Splunk (SPL)
 - TracesAgent: Tempo (TraceQL)
 - AthenaAgent: S3 Parquet (SQL)

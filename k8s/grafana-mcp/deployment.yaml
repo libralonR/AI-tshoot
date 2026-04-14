@@ -80,6 +80,13 @@ spec:
               key: grafana-insecure-skip-verify
               optional: true
         
+        - name: SERVICENOW_URL
+          valueFrom:
+            configMapKeyRef:
+              name: grafana-mcp-config
+              key: servicenow-url
+              optional: true
+        
         resources:
           requests:
             cpu: 100m
