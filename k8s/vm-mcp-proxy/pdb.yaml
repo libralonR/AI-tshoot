@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vm-mcp-proxy
+  namespace: observability
+  labels:
+    app: vm-mcp-proxy
+    component: mcp-proxy
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vm-mcp-proxy

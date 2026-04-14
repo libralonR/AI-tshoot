@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vm-mcp-proxy-config
+  namespace: observability
+  labels:
+    app: vm-mcp-proxy
+    component: mcp-proxy
+data:
+  # URL do VM MCP upstream (Go binary)
+  vm-mcp-upstream: "http://vm-mcp-server.observability.svc.cluster.local:8080"
+  # Modo de comunicação com o upstream: sse ou http
+  vm-mcp-mode: "sse"
+  # Timeout para chamadas ao upstream (segundos)
+  proxy-timeout: "30"

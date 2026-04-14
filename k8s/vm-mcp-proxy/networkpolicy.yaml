@@ -1,0 +1,44 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vm-mcp-proxy
+  namespace: observability
+  labels:
+    app: vm-mcp-proxy
+    component: mcp-proxy
+spec:
+  podSelector:
+    matchLabels:
+      app: vm-mcp-proxy
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Aceita tráfego do orchestrator (namespace copilot)
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: copilot
+    ports:
+    - protocol: TCP
+      port: 8084
+  egress:
+  # DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  # VM MCP upstream (Go binary)
+  - to:
+    - podSelector:
+        matchLabels:
+          app: vm-mcp-server
+    ports:
+    - protocol: TCP
+      port: 8080
