@@ -1,126 +1,92 @@
-# Testing Guide - Incidents PG MCP Server
+# Testing Guide - MCP Servers
 
 ## Overview
 
-Este guia documenta como testar o servidor MCP de incidentes PostgreSQL, incluindo os logs melhorados e os testes robustos implementados.
+Este guia documenta como testar os servidores MCP do Observability Troubleshooting Copilot.
 
-## Melhorias Implementadas
+## Servidores e Testes Disponíveis
 
-### 1. Logging Aprimorado
+| Servidor | Arquivo de Teste | Porta Default | Modo |
+|----------|-----------------|---------------|------|
+| Grafana MCP | `test_server_direct.py` | 8081 | Direto (call_tool) |
+| Incidents PG MCP | `test_incidents_pg.py` | 8082 | REST + Direto |
+| VM MCP Proxy | `test_vm_mcp_proxy.py` | 8084 | REST |
 
-Todos os métodos agora incluem logs estruturados com:
+## Quick Start
 
-- **Prefixos por função**: `[get_incident]`, `[search_incidents]`, `[get_related_incidents]`, `[get_incident_stats]`
-- **Logs de entrada**: Parâmetros recebidos
-- **Logs de progresso**: Etapas da execução
-- **Logs de saída**: Resultados e métricas
-- **Logs de erro**: Tipo de exceção e mensagem
+```bash
+# Grafana MCP (direto)
+python mcp-servers/test_server_direct.py
 
-#### Exemplo de Logs
+# Incidents PG MCP (REST)
+python mcp-servers/test_incidents_pg.py rest http://localhost:8082
 
+# VM MCP Proxy (REST)
+python mcp-servers/test_vm_mcp_proxy.py http://localhost:8084
+
+# Todos com verbose
+python mcp-servers/test_incidents_pg.py rest http://localhost:8082 --verbose
+python mcp-servers/test_vm_mcp_proxy.py http://localhost:8084 --verbose
 ```
-2026-04-07 11:00:31 - incidents-pg-mcp - INFO - [get_incident] Starting fetch for incident: INC0012345
-2026-04-07 11:00:31 - incidents-pg-mcp - DEBUG - [get_incident] Executing query for INC0012345
-2026-04-07 11:00:31 - incidents-pg-mcp - DEBUG - [get_incident] Query completed, result=found
-2026-04-07 11:00:31 - incidents-pg-mcp - INFO - [get_incident] Successfully fetched INC0012345 | cmdb_ci_name=aml-worker-service | priority=1 | state=In Progress | assignment_group=Squad Payments | grafana_labels_count=15 | alert_rule_uid=df4m8ngnj6br4e
-```
 
-### 2. Testes Robustos
+---
 
-O arquivo `test_incidents_pg.py` foi completamente reescrito com:
-
-- **12 testes via REST** (modo SSE)
-- **6 testes diretos** (chamadas de função)
-- **Formatação clara** com símbolos ✓/✗
-- **Modo verbose** para debug detalhado
-- **Sumário de resultados** com taxa de sucesso
-- **Exit code** apropriado para CI/CD
-
-## Como Executar os Testes
+## VM MCP Proxy
 
 ### Pré-requisitos
 
-```bash
-# Variáveis de ambiente necessárias
-export PG_HOST=your-postgres-host
-export PG_PORT=5432
-export PG_DATABASE=incidents
-export PG_USER=your-user
-export PG_PASSWORD=your-password
-export PG_SSLMODE=require
-```
-
-### Modo REST (Servidor SSE)
+1. VM MCP Server (Go binary) rodando em modo SSE ou HTTP
+2. VM MCP Proxy (`vm_mcp_proxy.py`) rodando apontando para o upstream
 
 ```bash
-# 1. Iniciar o servidor em modo SSE
+# 1. Iniciar o VM MCP (Go binary)
+export VM_INSTANCE_ENTRYPOINT=http://localhost:8428
+export VM_INSTANCE_TYPE=single
 export MCP_SERVER_MODE=sse
-export MCP_LISTEN_PORT=8082
-python mcp-servers/incidents_pg.py
+export MCP_LISTEN_ADDR=:8083
+./mcp-victoriametrics
 
-# 2. Em outro terminal, executar os testes
-python mcp-servers/test_incidents_pg.py rest http://localhost:8082
+# 2. Iniciar o proxy
+export VM_MCP_UPSTREAM=http://localhost:8083
+export VM_MCP_MODE=sse
+export PROXY_LISTEN_PORT=8084
+python mcp-servers/vm_mcp_proxy.py
 
-# 3. Com verbose para mais detalhes
-python mcp-servers/test_incidents_pg.py rest http://localhost:8082 --verbose
+# 3. Executar testes
+python mcp-servers/test_vm_mcp_proxy.py http://localhost:8084
 ```
 
-### Modo Direto (Sem Servidor)
+### Testes (12 testes)
 
-```bash
-# Executar testes diretos (chama funções diretamente)
-python mcp-servers/test_incidents_pg.py direct
+1. **Health Check** — Proxy up + upstream healthy
+2. **List Tools** — Lista tools do VM MCP via proxy
+3. **Instant Query (up)** — Query básica PromQL
+4. **Count Series** — Query de contagem
+5. **List Metrics** — Métricas disponíveis
+6. **List Labels** — Labels disponíveis
+7. **Label Values** — Valores de `__name__`
+8. **TSDB Status** — Cardinalidade
+9. **Alerts** — Alertas firing/pending
+10. **Range Query** — Query com time range
+11. **Documentation** — Busca na documentação
+12. **Unknown Tool** — Erro gracioso
 
-# Com verbose
-python mcp-servers/test_incidents_pg.py direct --verbose
-```
-
-## Testes Implementados
-
-### Testes REST (12 testes)
-
-1. **Health Check** - Verifica se o servidor está respondendo
-2. **List Tools** - Lista todas as ferramentas disponíveis
-3. **Search Incidents (No Filter)** - Busca sem filtros, limite 5
-4. **Get Incident by Number** - Busca incidente específico
-5. **Search by Application Service** - Filtra por cmdb_ci_name
-6. **Search by Priority** - Filtra por prioridade (P1)
-7. **Search by Date Range** - Filtra por janela de tempo (últimos 7 dias)
-8. **Get Related Incidents by Number** - Busca incidentes relacionados por número
-9. **Get Related Incidents by Service** - Busca incidentes relacionados por serviço
-10. **Get Incident Stats (by Priority)** - Estatísticas agrupadas por prioridade
-11. **Get Incident Stats (by State)** - Estatísticas agrupadas por estado
-12. **Get Incident Stats with Filter** - Estatísticas filtradas por serviço
-
-### Testes Diretos (6 testes)
-
-1. **search_incidents** - Busca básica com limite
-2. **get_incident** - Busca por número
-3. **search_incidents by service** - Busca filtrada por serviço
-4. **get_related_incidents** - Busca incidentes relacionados
-5. **get_incident_stats (by priority)** - Estatísticas por prioridade
-6. **get_incident_stats (by state)** - Estatísticas por estado
-
-## Saída dos Testes
-
-### Exemplo de Saída Normal
+### Saída Esperada
 
 ```
 ======================================================================
-  Testing Incidents PG MCP via REST
+  Testing VM MCP Proxy Adapter
 ======================================================================
-Base URL: http://localhost:8082
+Base URL: http://localhost:8084
 
 ▶ Test 1: Health Check
-  ✓ PASS - Status: 200
+  ✓ PASS - status=ok | upstream_healthy=True
 
 ▶ Test 2: List Available Tools
-  ✓ PASS - Found 4 tools
+  ✓ PASS - Found 18 tools
 
-▶ Test 3: Search Incidents (No Filter, Limit 5)
-  ✓ PASS - Count: 5
-    executionTime: 0.123s
-    incident_1: INC0012345 | aml-worker-service | P1 | In Progress
+▶ Test 3: Instant Query (up)
+  ✓ PASS - executionTime=0.045s
 
 ...
 
@@ -135,40 +101,9 @@ Success Rate: 100.0%
 🎉 All tests passed!
 ```
 
-### Exemplo de Saída Verbose
+---
 
-```
-▶ Test 4: Get Incident by Number (INC0012345)
-  ✓ PASS
-    number: INC0012345
-    cmdb_ci_name: aml-worker-service
-    priority: 1
-    state: In Progress
-    assignment_group: Squad Payments
-    grafana_labels_count: 15
-      label_alertname: Conta, Tempo de resposta
-      label_application_service: aml-worker-service
-      label_business_capability: aml-pld
-      label_owner_squad: squad-payments
-      label_Severidade: P1
-    alert_rule_uid: df4m8ngnj6br4e
-    executionTime: 0.045s
-```
-
-## Integração com CI/CD
-
-O script retorna exit code apropriado:
-- `0` se todos os testes passaram
-- `1` se algum teste falhou
-
-```bash
-# Em pipeline CI/CD
-python mcp-servers/test_incidents_pg.py rest http://incidents-pg-mcp:8080
-if [ $? -ne 0 ]; then
-    echo "Tests failed!"
-    exit 1
-fi
-```
+## Incidents PG MCP
 
 ## Logs Detalhados por Função
 
@@ -221,35 +156,57 @@ fi
 
 ## Troubleshooting
 
-### Erro: Connection refused
+### Incidents PG MCP
 
 ```bash
 # Verificar se o servidor está rodando
 curl http://localhost:8082/health
 
-# Verificar logs do servidor
-tail -f logs/incidents-pg-mcp.log
-```
-
-### Erro: Authentication failed
-
-```bash
 # Verificar variáveis de ambiente
-echo $PG_USER
-echo $PG_HOST
+echo $PG_USER $PG_HOST
 
 # Testar conexão direta
 psql -h $PG_HOST -U $PG_USER -d $PG_DATABASE
 ```
 
-### Erro: No incidents found
+### VM MCP Proxy
 
 ```bash
-# Verificar se há dados na tabela
-psql -h $PG_HOST -U $PG_USER -d $PG_DATABASE -c "SELECT COUNT(*) FROM incidents_snow;"
+# Verificar se o proxy está rodando
+curl http://localhost:8084/health
 
-# Verificar últimos incidentes
-psql -h $PG_HOST -U $PG_USER -d $PG_DATABASE -c "SELECT number, cmdb_ci_name, opened_at FROM incidents_snow ORDER BY opened_at DESC LIMIT 5;"
+# Verificar se o upstream (Go binary) está rodando
+curl http://localhost:8083/health/liveness
+
+# Verificar logs do proxy
+# Procurar por: [MCPSSEClient] ou [MCPHTTPClient]
+
+# Testar tool diretamente no upstream (se modo http)
+curl -X POST http://localhost:8083/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"tools/list"}'
+```
+
+### Grafana MCP
+
+```bash
+# Verificar se o servidor está rodando
+curl http://localhost:8081/health
+
+# Verificar variáveis de ambiente
+echo $GRAFANA_URL $GRAFANA_TOKEN
+```
+
+## Integração com CI/CD
+
+Todos os scripts retornam exit code apropriado:
+- `0` se todos os testes passaram
+- `1` se algum teste falhou
+
+```bash
+# Em pipeline CI/CD
+python mcp-servers/test_incidents_pg.py rest http://incidents-pg-mcp:8082 || exit 1
+python mcp-servers/test_vm_mcp_proxy.py http://vm-mcp-proxy:8084 || exit 1
 ```
 
 ## Métricas de Performance
@@ -265,6 +222,5 @@ Os logs incluem `executionTime` para cada operação:
 
 1. Adicionar testes de carga (locust)
 2. Adicionar testes de integração com orchestrator
-3. Adicionar métricas Prometheus
-4. Adicionar health check detalhado (verificar conexão PG)
-5. Adicionar cache para queries frequentes
+3. Adicionar health check detalhado (verificar conexão PG / upstream VM MCP)
+4. Adicionar cache para queries frequentes
