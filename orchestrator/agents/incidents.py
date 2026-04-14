@@ -44,14 +44,14 @@ class IncidentsAgent:
     async def find_related_incidents(
         self,
         number: str = None,
-        cmdb_ci_name: str = None,
+        application_service: str = None,
         time_window_hours: int = 24,
     ) -> List[Evidence]:
         args = {"time_window_hours": time_window_hours}
         if number:
             args["number"] = number
-        if cmdb_ci_name:
-            args["cmdb_ci_name"] = cmdb_ci_name
+        if application_service:
+            args["application_service"] = application_service
 
         result = await self.mcp.call_tool("get_related_incidents", args)
         if not result.get("success"):

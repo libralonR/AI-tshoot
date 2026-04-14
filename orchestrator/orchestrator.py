@@ -300,20 +300,37 @@ class Orchestrator:
                 evidence = await agent.fetch_incident(input_data.value)
                 if evidence:
                     result = evidence.result
+                    
+                    # PRIORIDADE: Extrair application_service das labels do Grafana no description
+                    # cmdb_ci_name nem sempre corresponde ao application_service real
+                    grafana_labels = result.get("_grafana_labels", {})
+                    app_svc = grafana_labels.get("application_service") or result.get("cmdb_ci_name")
+                    
                     case_file.scope = Scope(
-                        serviceName=result.get("cmdb_ci_name"),
+                        serviceName=app_svc,
                         additionalLabels={
                             "incident_number": result.get("number", ""),
                             "priority": result.get("priority", ""),
                             "category": result.get("category", ""),
                             "assignment_group": result.get("assignment_group_name", ""),
+                            "cmdb_ci_name": result.get("cmdb_ci_name", ""),
                         },
                     )
+                    
+                    # Adicionar labels do Grafana ao scope se disponíveis
+                    if grafana_labels:
+                        for label_key in ("business_capability", "business_domain", "business_service",
+                                          "owner_squad", "owner_sre"):
+                            val = grafana_labels.get(label_key)
+                            if val and case_file.scope.additionalLabels is not None:
+                                case_file.scope.additionalLabels[label_key] = val
+                    
                     case_file.evidence.append(evidence)
                     log.info(
                         f"[_determine_scope_and_time_window] Scope from incident: "
-                        f"serviceName={case_file.scope.serviceName}, "
-                        f"priority={result.get('priority')}"
+                        f"serviceName={app_svc} (cmdb_ci_name={result.get('cmdb_ci_name')}) | "
+                        f"priority={result.get('priority')} | "
+                        f"grafana_labels={'yes' if grafana_labels else 'no'}"
                     )
                 else:
                     log.warning(f"[_determine_scope_and_time_window] No evidence returned for incident: {input_data.value}")
@@ -353,7 +370,7 @@ class Orchestrator:
             
             log.info(
                 f"[_gather_signals] Incident correlation keys | "
-                f"ci_name={ci_name} | "
+                f"application_service={ci_name} | "
                 f"inc_number={inc_number}"
             )
             
@@ -361,17 +378,17 @@ class Orchestrator:
                 log.info(
                     f"[_gather_signals] Fetching related incidents | "
                     f"number={inc_number} | "
-                    f"cmdb_ci_name={ci_name}"
+                    f"application_service={ci_name}"
                 )
                 tasks.append(
                     incidents_agent.find_related_incidents(
-                        number=inc_number, cmdb_ci_name=ci_name
+                        number=inc_number, application_service=ci_name
                     )
                 )
             else:
                 log.warning(
                     f"[_gather_signals] Skipping incident search - no correlation keys | "
-                    f"serviceName={ci_name} | "
+                    f"application_service={ci_name} | "
                     f"incident_number={inc_number}"
                 )
 

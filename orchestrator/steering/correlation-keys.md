@@ -97,13 +97,13 @@ O orchestrator normaliza labels de diferentes fontes para um vocabulário canôn
 
 ### Passo 1: Identificar application_service
 - Se entrada é ALERT_UID → extrair `application_service` dos labels do alerta
-- Se entrada é INCIDENT_ID → extrair `cmdb_ci_name` do incidente, normalizar para `application_service`
-- Se entrada é SYMPTOM → tentar extrair nome de serviço do texto
+- Se entrada é INCIDENT_ID → extrair `application_service` das `_grafana_labels` do description (prioridade), fallback para `cmdb_ci_name`
+- Se entrada é SYMPTOM → usar `application_service` dos filtros fornecidos
 
 ### Passo 2: Buscar sinais cruzados
 - Com `application_service` definido:
   - Buscar alertas firing no Grafana com mesmo `application_service`
-  - Buscar incidentes no PostgreSQL com mesmo `cmdb_ci_name`
+  - Buscar incidentes no PostgreSQL por `application_service` no campo `description` (prioridade) e `cmdb_ci_name` (fallback)
   - Buscar incidentes relacionados via `parent_incident`
 
 ### Passo 3: Enriquecer com contexto de negócio
@@ -126,6 +126,7 @@ O orchestrator normaliza labels de diferentes fontes para um vocabulário canôn
 ## Gaps Conhecidos
 
 - Alertas sem `application_service` preenchido → não correlacionam com incidentes
-- Incidentes sem `cmdb_ci_name` → não correlacionam com alertas
+- Incidentes sem labels no `description` E sem `cmdb_ci_name` → não correlacionam (raro, pois `description` é sempre preenchido)
 - Labels de Kubernetes (`namespace`, `pod`, `cluster`) nem sempre presentes nos alertas
+- `cmdb_ci_name` pode diferir do `application_service` real (ex: `cmdb_ci_name=Grafana` vs `application_service=grafana-tempo`)
 - `env`/`environment` não é label padrão nos alertas Grafana atuais

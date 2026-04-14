@@ -39,7 +39,7 @@ business_capability → business_domain → business_service → application_ser
 ## Fontes disponíveis
 
 - Alertas: Grafana (via Grafana MCP) — labels incluem `application_service`, `Severidade`, `owner_squad`
-- Incidentes: PostgreSQL (via Incidents PG MCP) — campo `cmdb_ci_name` = `application_service`
+- Incidentes: PostgreSQL (via Incidents PG MCP) — busca por `application_service` no campo `description` (prioridade) e `cmdb_ci_name` (fallback)
 - Métricas: VictoriaMetrics (via VM MCP) — PromQL/MetricsQL queries, labels, series, cardinality
 - Logs: Splunk (futuro)
 - Traces: Tempo (futuro)
@@ -86,7 +86,7 @@ Quando presente, o campo `servicenow.kb_link` do alerta normalizado contém o li
 
 | Grafana label           | Incidente (PG) field     | Label canônico         | Observação |
 |-------------------------|--------------------------|------------------------|------------|
-| `application_service`   | `cmdb_ci_name` OU `description` | `application_service`  | **Busca prioritária no `description`** |
+| `application_service`   | `description` (prioridade) OU `cmdb_ci_name` (fallback) | `application_service`  | **Busca prioritária no `description`** |
 | `owner_squad`           | `assignment_group_name`  | `owner_squad`          | |
 | `Severidade`            | `priority`               | `severity`             | |
 | `fingerprint`           | `description` (parseado) | `fingerprint`          | Correlação precisa alerta ↔ incidente |

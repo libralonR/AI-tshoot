@@ -26,13 +26,13 @@ Tabela: `public.incidents_snow`
 Campos: sys_id, number, short_description, opened_at, sys_created_by, impact, description,
 category, subcategory, urgency, location, cmdb_ci, assignment_group, state, priority,
 assignment_group_name, cmdb_ci_name, location_name, parent_incident.
-- `cmdb_ci_name` é a chave de correlação com serviços (equivale a service.name)
+- `cmdb_ci_name` é o CI do ServiceNow — **NEM SEMPRE corresponde ao `application_service`** real. Usar `_grafana_labels.application_service` do campo `description` como prioridade
 - `parent_incident` permite rastrear incidentes filhos/relacionados
 
 ## Metadados dos Alertas Grafana
 Labels enviados nos alertas:
 - `alertname`: Nome da regra de alerta
-- `application_service`: Componente (serviço, API, rotina) — correlaciona com cmdb_ci_name
+- `application_service`: Componente (serviço, API, rotina) — chave canônica de correlação
 - `business_capability`: Capacidade (Tecnológica ou Negócio)
 - `business_domain`: Domínio (Tecnológico ou Negócio)
 - `business_service`: Serviço ou Produto

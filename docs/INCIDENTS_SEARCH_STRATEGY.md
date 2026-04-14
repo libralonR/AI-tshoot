@@ -2,11 +2,13 @@
 
 ## Problema Identificado
 
-O campo `cmdb_ci_name` na tabela `incidents_snow` **nem sempre está preenchido**. As informações do alerta Grafana (incluindo `application_service`) estão **sempre** no campo `description`.
+O campo `cmdb_ci_name` na tabela `incidents_snow` **nem sempre está preenchido** e **pode diferir do `application_service` real** (ex: `cmdb_ci_name=Grafana` vs `application_service=grafana-tempo`). As informações do alerta Grafana (incluindo `application_service`) estão **sempre** no campo `description`.
 
 ## Solução Implementada
 
 Todas as funções de busca agora **priorizam** o campo `description` e usam `cmdb_ci_name` apenas como fallback.
+
+O orchestrator, ao receber um INCIDENT_ID, extrai `application_service` das `_grafana_labels` do description (prioridade) e usa `cmdb_ci_name` apenas como fallback para o scope.
 
 ### 1. `search_incidents` - Busca com Filtros
 

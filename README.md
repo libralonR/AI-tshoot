@@ -92,7 +92,7 @@ Todos os MCP servers suportam modo dual:
 
 Chave canônica: `application_service`
 - Grafana: label `application_service`
-- Incidentes PG: campo `cmdb_ci_name` (normalizado para `application_service`)
+- Incidentes PG: `application_service` extraído das labels do Grafana no campo `description` (prioridade), `cmdb_ci_name` como fallback
 - Hierarquia: `business_capability → business_domain → business_service → application_service`
 
 ## Documentação

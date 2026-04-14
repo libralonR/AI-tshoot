@@ -9,7 +9,7 @@ description: Regras de correlação entre alertas (Grafana) e incidentes (Postgr
 ## Chave Canônica
 `application_service` conecta alertas Grafana e incidentes PostgreSQL.
 
-**IMPORTANTE**: No PostgreSQL, o campo `cmdb_ci_name` **nem sempre está preenchido**. As informações do alerta Grafana (incluindo `application_service`) estão **SEMPRE** no campo `description`.
+**IMPORTANTE**: No PostgreSQL, o campo `cmdb_ci_name` **nem sempre está preenchido** e **pode diferir do `application_service` real** (ex: `cmdb_ci_name=Grafana` vs `application_service=grafana-tempo`). As informações do alerta Grafana (incluindo `application_service`) estão **SEMPRE** no campo `description`.
 
 ### Estratégia de Busca
 
@@ -42,7 +42,7 @@ business_capability → business_domain → business_service → application_ser
 
 ## Correlação Alerta ↔ Incidente
 
-**IMPORTANTE**: A busca de incidentes **prioriza** o campo `description` (sempre preenchido) sobre `cmdb_ci_name` (nem sempre preenchido).
+**IMPORTANTE**: A busca de incidentes **prioriza** o campo `description` (sempre preenchido) sobre `cmdb_ci_name` (nem sempre preenchido e pode diferir do `application_service` real).
 
 1. Extrair labels do alerta (`application_service`, `business_capability`, `owner_squad`, etc.)
 2. Buscar incidentes no bloco `Labels:` do campo `description`:

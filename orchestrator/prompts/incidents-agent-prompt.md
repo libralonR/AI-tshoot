@@ -40,7 +40,7 @@ Estatísticas agregadas.
 | Campo                  | Uso                                                |
 |------------------------|----------------------------------------------------|
 | `number`               | Identificador (INC0012345)                         |
-| `cmdb_ci_name`         | = `application_service` (chave de correlação) — **ATENÇÃO: nem sempre preenchido** |
+| `cmdb_ci_name`         | **NEM SEMPRE corresponde ao `application_service`** (ex: `cmdb_ci_name=Grafana` vs `application_service=grafana-tempo`). Usar `_grafana_labels.application_service` como prioridade |
 | `description`          | **CAMPO PRIORITÁRIO**: Contém labels do alerta Grafana (parseadas em `_grafana_labels`) — **SEMPRE preenchido** |
 | `assignment_group_name`| = `owner_squad`                                    |
 | `priority`             | Correlaciona com `Severidade` do Grafana           |

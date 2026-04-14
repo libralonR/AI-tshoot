@@ -40,6 +40,7 @@ que consultam fontes de observabilidade via MCP servers (read-only).
 
 Chave canônica: `application_service`
 Alias mapping normaliza `cmdb_ci_name`, `service.name`, `service` → `application_service`
+Quando input é INCIDENT_ID, extrai `application_service` das `_grafana_labels` do description (prioridade), fallback para `cmdb_ci_name`
 
 ## CaseFile
 
