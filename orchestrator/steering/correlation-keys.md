@@ -125,8 +125,16 @@ O orchestrator normaliza labels de diferentes fontes para um vocabulário canôn
 
 ## Gaps Conhecidos
 
+**Gaps CRÍTICOS** (reportar sempre):
 - Alertas sem `application_service` preenchido → não correlacionam com incidentes
-- Incidentes sem labels no `description` E sem `cmdb_ci_name` → não correlacionam (raro, pois `description` é sempre preenchido)
-- Labels de Kubernetes (`namespace`, `pod`, `cluster`) nem sempre presentes nos alertas
+
+**Gaps IMPORTANTES** (reportar):
+- Alertas sem `business_capability` → não é possível identificar o time responsável
+
+**Gaps INFORMATIVOS** (NÃO reportar como gap):
+- `owner_squad` ausente → informativo, não obrigatório para correlação
+- `owner_sre` ausente → informativo
+- `Severidade` ausente → informativo
+- Labels K8s ausentes (`namespace`, `pod`, `cluster`) → esperado em alguns alertas
 - `cmdb_ci_name` pode diferir do `application_service` real (ex: `cmdb_ci_name=Grafana` vs `application_service=grafana-tempo`)
 - `env`/`environment` não é label padrão nos alertas Grafana atuais
