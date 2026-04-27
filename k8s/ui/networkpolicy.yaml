@@ -1,0 +1,44 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: copilot-ui
+  namespace: copilot
+  labels:
+    app: copilot-ui
+    component: frontend
+spec:
+  podSelector:
+    matchLabels:
+      app: copilot-ui
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Aceita tráfego do ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress
+    ports:
+    - protocol: TCP
+      port: 8501
+  egress:
+  # DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  # Orchestrator (mesmo namespace)
+  - to:
+    - podSelector:
+        matchLabels:
+          app: orchestrator
+    ports:
+    - protocol: TCP
+      port: 8080

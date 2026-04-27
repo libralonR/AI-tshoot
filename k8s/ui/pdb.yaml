@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: copilot-ui
+  namespace: copilot
+  labels:
+    app: copilot-ui
+    component: frontend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: copilot-ui

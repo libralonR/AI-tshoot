@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: copilot-ui
+  namespace: copilot
+  labels:
+    app: copilot-ui
+    component: frontend
+  annotations:
+    # Ajustar conforme o ingress controller usado (nginx, alb, etc.)
+    # nginx.ingress.kubernetes.io/rewrite-target: /
+    # alb.ingress.kubernetes.io/scheme: internal
+spec:
+  rules:
+  - host: copilot.internal.corp
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: copilot-ui
+            port:
+              number: 8501
