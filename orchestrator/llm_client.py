@@ -581,8 +581,16 @@ class LLMClient:
                     tool_result = {"error": "No tool executor configured"}
                     log.warning(f"[LLMClient.chat] No tool executor configured for {fn_name}")
 
-                # Add tool result to conversation
+                # Add tool result to conversation (truncar se muito grande para evitar 504 no gateway)
                 tool_result_str = json.dumps(tool_result, default=str)
+                if len(tool_result_str) > 50000:
+                    tool_result_str = self._truncate_tool_result(tool_result, fn_name)
+                    log.warning(
+                        f"[LLMClient.chat] Tool result truncated | "
+                        f"tool={fn_name} | "
+                        f"original_size={len(json.dumps(tool_result, default=str))} | "
+                        f"truncated_size={len(tool_result_str)}"
+                    )
                 self.conversation_history.append(
                     {
                         "role": "tool",
@@ -648,6 +656,20 @@ class LLMClient:
                         f"elapsed={api_time:.3f}s | "
                         f"error={error_msg[:200]}"
                     )
+                elif "InternalServerError" in error_type or "504" in error_msg:
+                    log.error(
+                        f"[LLMClient.chat] Gateway timeout 504 (iteration {tool_call_iteration}) | "
+                        f"error_type={error_type} | "
+                        f"elapsed={api_time:.3f}s | "
+                        f"conversation_size={sum(len(m.get('content','') or '') for m in self.conversation_history)} chars | "
+                        f"error={error_msg[:200]}"
+                    )
+                    # Tentar responder com os dados que já temos
+                    raise RuntimeError(
+                        f"O LLM Gateway retornou timeout (504) após {api_time:.1f}s. "
+                        f"Isso geralmente acontece quando o volume de dados das tools é muito grande. "
+                        f"Tente uma pergunta mais específica ou com filtros mais restritivos."
+                    ) from e
                 else:
                     log.error(
                         f"[LLMClient.chat] OpenAI API call failed (iteration {tool_call_iteration}) | "
@@ -677,3 +699,33 @@ class LLMClient:
     def reset(self):
         """Reset conversation history."""
         self.conversation_history = []
+
+    @staticmethod
+    def _truncate_tool_result(result: dict, tool_name: str, max_items: int = 15) -> str:
+        """Trunca resultados de tools grandes para evitar 504 no LLM Gateway.
+
+        Mantém os N itens mais recentes de listas de resultados e adiciona
+        um resumo com a contagem total.
+        """
+        truncated = dict(result)
+
+        # get_related_incidents: truncar cada lista
+        if "result" in truncated and isinstance(truncated["result"], dict):
+            inner = truncated["result"]
+            for key in ("by_description", "by_ci", "by_parent"):
+                items = inner.get(key, [])
+                if len(items) > max_items:
+                    inner[key] = items[:max_items]
+                    inner[f"_{key}_truncated"] = True
+                    inner[f"_{key}_total"] = len(items)
+
+        # find_firing_alerts ou search_incidents: truncar lista de resultados
+        if "result" in truncated and isinstance(truncated["result"], list):
+            items = truncated["result"]
+            if len(items) > max_items:
+                truncated["result"] = items[:max_items]
+                truncated["_truncated"] = True
+                truncated["_total_results"] = len(items)
+                truncated["_shown_results"] = max_items
+
+        return json.dumps(truncated, default=str)
