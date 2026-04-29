@@ -1,7 +1,10 @@
 # VM MCP Proxy - Kubernetes Deployment
 
-Proxy adapter que traduz REST `/tools/{name}` para protocolo MCP SSE/HTTP,
+Proxy adapter (v2.0) que traduz REST `/tools/{name}` para protocolo MCP SSE/HTTP,
 permitindo que o orchestrator se comunique com o `mcp-victoriametrics` (Go binary).
+
+Mantém o stream SSE aberto em background para receber respostas assíncronas,
+com reconexão automática e retry em caso de sessão expirada.
 
 ## Arquitetura
 
