@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vm-mcp-python
+  namespace: observability
+  labels:
+    app: vm-mcp-python
+    component: mcp-server
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vm-mcp-python

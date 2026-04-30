@@ -29,6 +29,12 @@ que consultam fontes de observabilidade via MCP servers (read-only).
 - TracesAgent: Tempo (TraceQL)
 - AthenaAgent: S3 Parquet (SQL)
 
+## Componentes adicionais
+
+- VM MCP Proxy: traduz REST /tools/{name} → protocolo MCP SSE/HTTP para o mcp-victoriametrics (Go)
+- Streamlit UI: interface gráfica para testar /chat e /investigate
+- Métricas Prometheus: prefixo `observa_*`, endpoint /metrics
+
 ## Guardrails
 
 - Read-only: nenhuma mutação permitida

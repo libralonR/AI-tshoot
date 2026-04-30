@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vm-mcp-python-config
+  namespace: observability
+  labels:
+    app: vm-mcp-python
+    component: mcp-server
+data:
+  # URL do VictoriaMetrics (vmsingle ou vmselect)
+  vm-url: "http://victoriametrics.observability.svc.cluster.local:8428"
+  # Timeout para queries (segundos)
+  vm-timeout: "30"
+  # Porta do MCP server
+  mcp-listen-port: "8085"

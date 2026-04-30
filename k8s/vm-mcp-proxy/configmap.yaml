@@ -9,7 +9,8 @@ metadata:
 data:
   # URL do VM MCP upstream (Go binary)
   vm-mcp-upstream: "http://vm-mcp-server.observability.svc.cluster.local:8080"
-  # Modo de comunicação com o upstream: sse ou http
-  vm-mcp-mode: "sse"
+  # Modo de comunicação com o upstream: auto (detecta), http ou sse
+  # Se vazio ou "auto", detecta automaticamente testando /mcp e /sse
+  vm-mcp-mode: ""
   # Timeout para chamadas ao upstream (segundos)
-  proxy-timeout: "30"
+  proxy-timeout: "60"

@@ -16,11 +16,31 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
 def _load_system_prompt() -> str:
-    """Load orchestrator system prompt from file."""
+    """Load orchestrator system prompt + metrics catalog."""
     prompt_file = PROMPTS_DIR / "orchestrator-prompt.md"
+    base_prompt = ""
     if prompt_file.exists():
-        return prompt_file.read_text()
-    return "You are an observability troubleshooting copilot for SRE teams."
+        base_prompt = prompt_file.read_text()
+    else:
+        base_prompt = "You are an observability troubleshooting copilot for SRE teams."
+
+    # Append metrics catalog so the LLM knows which queries to use
+    from config import config
+    if config.metrics_catalog:
+        catalog_section = "\n\n## Catálogo de Queries PromQL (pré-definidas)\n\n"
+        catalog_section += "Use estas queries quando precisar consultar métricas. "
+        catalog_section += "Substitua `{service}` pelo `application_service` real.\n\n"
+        for entry in config.metrics_catalog:
+            name = entry.get("name", "")
+            category = entry.get("category", "")
+            query = entry.get("query_template", "")
+            desc = entry.get("description", "")
+            catalog_section += f"- **{name}** ({category}): `{query}`\n"
+            if desc:
+                catalog_section += f"  {desc}\n"
+        base_prompt += catalog_section
+
+    return base_prompt
 
 
 # Tools that the LLM can call (function calling)

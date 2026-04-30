@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vm-mcp-python
+  namespace: observability
+  labels:
+    app: vm-mcp-python
+    component: mcp-server
+    tier: backend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: vm-mcp-python
+  template:
+    metadata:
+      labels:
+        app: vm-mcp-python
+        component: mcp-server
+        tier: backend
+    spec:
+      serviceAccountName: vm-mcp-python
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+      - name: vm-mcp-python
+        image: your-registry/vm-mcp-python:latest
+        imagePullPolicy: Always
+
+        ports:
+        - name: http
+          containerPort: 8085
+          protocol: TCP
+
+        env:
+        - name: VM_URL
+          valueFrom:
+            configMapKeyRef:
+              name: vm-mcp-python-config
+              key: vm-url
+        - name: VM_BEARER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vm-mcp-python-secrets
+              key: vm-bearer-token
+              optional: true
+        - name: VM_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: vm-mcp-python-config
+              key: vm-timeout
+        - name: MCP_LISTEN_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: vm-mcp-python-config
+              key: mcp-listen-port
+
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8085
+          initialDelaySeconds: 5
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8085
+          initialDelaySeconds: 3
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - vm-mcp-python
+              topologyKey: kubernetes.io/hostname
+
+      tolerations:
+      - key: "observability"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
