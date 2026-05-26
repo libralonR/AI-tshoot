@@ -120,7 +120,10 @@ class Config:
 
         catalog_file = STEERING_DIR / "metrics-catalog.md"
         if not catalog_file.exists():
-            log.warning("metrics-catalog.md not found in steering dir")
+            log.warning(
+                f"[Config] metrics-catalog.md NOT FOUND in {STEERING_DIR} — "
+                f"MetricsAgent will NOT execute catalog queries during /investigate"
+            )
             return []
 
         content = catalog_file.read_text()
@@ -128,16 +131,33 @@ class Config:
 
         # Extrair blocos yaml do markdown
         yaml_blocks = re.findall(r"```yaml\s*\n(.*?)```", content, re.DOTALL)
-        for block in yaml_blocks:
+        log.info(f"[Config] Found {len(yaml_blocks)} YAML blocks in metrics-catalog.md")
+
+        for idx, block in enumerate(yaml_blocks, 1):
             try:
                 parsed = yaml.safe_load(block)
                 if isinstance(parsed, list):
                     entries.extend(parsed)
+                    log.info(f"[Config] YAML block {idx}: parsed {len(parsed)} entries")
+                else:
+                    log.warning(f"[Config] YAML block {idx}: not a list, got {type(parsed).__name__}")
             except Exception as e:
-                log.warning(f"Failed to parse YAML block in metrics-catalog.md: {e}")
+                log.warning(f"[Config] YAML block {idx}: parse FAILED — {e}")
 
-        log.info(f"Loaded {len(entries)} queries from metrics-catalog.md")
-        return entries
+        # Validar entries
+        valid = []
+        for entry in entries:
+            if "query_template" in entry and "name" in entry:
+                valid.append(entry)
+            else:
+                log.warning(f"[Config] Invalid catalog entry (missing name/query_template): {entry}")
+
+        log.info(
+            f"[Config] Loaded metrics catalog | "
+            f"total_entries={len(valid)} | "
+            f"categories={list(set(e.get('category', '?') for e in valid))}"
+        )
+        return valid
 
 
 config = Config()

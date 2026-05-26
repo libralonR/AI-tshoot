@@ -341,14 +341,22 @@ class Orchestrator:
     async def _gather_signals(self, case_file: CaseFile) -> List[Evidence]:
         import time
         start_time = time.time()
-        
+
+        ci_name = case_file.scope.serviceName
+        additional = case_file.scope.additionalLabels or {}
+        inc_number = additional.get("incident_number")
+        has_catalog = bool(ci_name and config.metrics_catalog)
+
         log.info(
             f"[_gather_signals] Starting signal gathering | "
-            f"serviceName={case_file.scope.serviceName} | "
+            f"serviceName={ci_name} | "
             f"environment={case_file.scope.environment} | "
-            f"additionalLabels={list((case_file.scope.additionalLabels or {}).keys())}"
+            f"additionalLabels={list(additional.keys())} | "
+            f"has_incident_number={bool(inc_number)} | "
+            f"has_metrics_catalog={has_catalog} | "
+            f"catalog_entries={len(config.metrics_catalog)}"
         )
-        
+
         evidence_list: List[Evidence] = []
 
         grafana_client = MCPClient("grafana", config.mcp_servers["grafana"].endpoint)
@@ -358,90 +366,115 @@ class Orchestrator:
         incidents_agent = IncidentsAgent(incidents_client)
         metrics_agent = MetricsAgent(vm_client)
 
-        try:
-            # Always fetch firing alerts
-            log.info(f"[_gather_signals] Fetching firing alerts from Grafana...")
-            tasks = [grafana_agent.find_firing_alerts(case_file.scope)]
+        # Mapa de nome → índice para logs legíveis
+        task_names = []
 
-            # Fetch incidents if we have correlation keys
-            ci_name = case_file.scope.serviceName
-            additional = case_file.scope.additionalLabels or {}
-            inc_number = additional.get("incident_number")
-            
+        try:
+            tasks = []
+
+            # Task: Grafana alerts (sempre)
+            task_names.append("grafana:find_firing_alerts")
+            tasks.append(grafana_agent.find_firing_alerts(case_file.scope))
             log.info(
-                f"[_gather_signals] Incident correlation keys | "
-                f"application_service={ci_name} | "
-                f"inc_number={inc_number}"
+                f"[_gather_signals] Queued task: grafana:find_firing_alerts | "
+                f"endpoint={config.mcp_servers['grafana'].endpoint}"
             )
-            
+
+            # Task: Incidents (se tiver chave de correlação)
             if inc_number or ci_name:
-                log.info(
-                    f"[_gather_signals] Fetching related incidents | "
-                    f"number={inc_number} | "
-                    f"application_service={ci_name}"
-                )
+                task_names.append("incidents:find_related_incidents")
                 tasks.append(
                     incidents_agent.find_related_incidents(
                         number=inc_number, application_service=ci_name
                     )
                 )
+                log.info(
+                    f"[_gather_signals] Queued task: incidents:find_related_incidents | "
+                    f"number={inc_number} | application_service={ci_name} | "
+                    f"endpoint={config.mcp_servers['incidents-pg'].endpoint}"
+                )
             else:
                 log.warning(
-                    f"[_gather_signals] Skipping incident search - no correlation keys | "
-                    f"application_service={ci_name} | "
-                    f"incident_number={inc_number}"
+                    f"[_gather_signals] SKIPPED incidents search — no correlation keys | "
+                    f"application_service={ci_name} | incident_number={inc_number}"
                 )
 
-            # Fetch metrics from VictoriaMetrics if we have a service name
-            if ci_name and config.metrics_catalog:
-                log.info(
-                    f"[_gather_signals] Fetching catalog metrics from VictoriaMetrics | "
-                    f"service={ci_name} | "
-                    f"catalog_queries={len(config.metrics_catalog)}"
-                )
+            # Task: Metrics catalog (se tiver service name + catálogo)
+            if has_catalog:
+                task_names.append("metrics:execute_catalog_queries")
                 tasks.append(
                     metrics_agent.execute_catalog_queries(ci_name, config.metrics_catalog)
                 )
+                log.info(
+                    f"[_gather_signals] Queued task: metrics:execute_catalog_queries | "
+                    f"service={ci_name} | "
+                    f"queries={len(config.metrics_catalog)} | "
+                    f"endpoint={config.mcp_servers['victoriametrics'].endpoint}"
+                )
+            else:
+                log.warning(
+                    f"[_gather_signals] SKIPPED metrics catalog — "
+                    f"service={'set' if ci_name else 'MISSING'} | "
+                    f"catalog={'loaded' if config.metrics_catalog else 'EMPTY'} | "
+                    f"catalog_entries={len(config.metrics_catalog)}"
+                )
 
-            # Execute alert expression if we have alert data
+            # Task: Alert expression (se tiver dados do alerta)
             alert_data = self._extract_alert_data(case_file)
             if alert_data:
-                log.info(f"[_gather_signals] Executing alert PromQL expression from alert data")
+                task_names.append("metrics:execute_alert_expression")
                 tasks.append(
                     metrics_agent.execute_alert_expression(alert_data)
                 )
+                log.info(f"[_gather_signals] Queued task: metrics:execute_alert_expression")
+            else:
+                log.info(
+                    f"[_gather_signals] SKIPPED alert expression — "
+                    f"input_type={case_file.input.type} (only runs for ALERT_UID)"
+                )
 
-            log.info(f"[_gather_signals] Executing {len(tasks)} parallel tasks...")
+            log.info(
+                f"[_gather_signals] Executing {len(tasks)} parallel tasks: "
+                f"{task_names}"
+            )
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for idx, result in enumerate(results, 1):
+
+            for idx, result in enumerate(results):
+                name = task_names[idx] if idx < len(task_names) else f"task_{idx}"
                 if isinstance(result, Exception):
                     log.error(
-                        f"[_gather_signals] Task {idx}/{len(tasks)} failed | "
+                        f"[_gather_signals] FAILED {name} | "
                         f"error_type={type(result).__name__} | "
-                        f"error={str(result)[:200]}"
+                        f"error={str(result)[:300]}"
                     )
                 elif isinstance(result, list):
                     log.info(
-                        f"[_gather_signals] Task {idx}/{len(tasks)} returned list | "
-                        f"items={len(result)}"
+                        f"[_gather_signals] OK {name} | "
+                        f"evidence_count={len(result)}"
                     )
                     evidence_list.extend(result)
                 elif result is not None:
-                    log.info(f"[_gather_signals] Task {idx}/{len(tasks)} returned single evidence")
+                    log.info(f"[_gather_signals] OK {name} | evidence_count=1")
                     evidence_list.append(result)
                 else:
-                    log.warning(f"[_gather_signals] Task {idx}/{len(tasks)} returned None")
-                    
+                    log.warning(f"[_gather_signals] EMPTY {name} | returned None")
+
         finally:
             await grafana_client.close()
             await incidents_client.close()
             await vm_client.close()
 
         execution_time = time.time() - start_time
+
+        # Resumo por fonte
+        by_source = {}
+        for e in evidence_list:
+            by_source[e.source] = by_source.get(e.source, 0) + 1
+
         log.info(
             f"[_gather_signals] Signal gathering completed | "
-            f"evidence_count={len(evidence_list)} | "
+            f"total_evidence={len(evidence_list)} | "
+            f"by_source={by_source} | "
             f"execution_time={execution_time:.3f}s"
         )
         
@@ -562,6 +595,7 @@ async def _execute_tool(tool_name: str, arguments: dict) -> dict:
                 "rules", "alerts", "tsdb_status", "top_queries", "active_queries",
                 "metric_statistics", "documentation", "prettify_query", "explain_query",
                 "metrics_metadata", "tenants"}
+    tempo = {"traceql-search", "traceql-metrics-instant", "traceql-metrics-range", "get-trace", "get-attribute-names", "get-attribute-values", "docs-traceql"}
     
     if tool_name in grafana_tools:
         server_name = "grafana"
@@ -577,6 +611,11 @@ async def _execute_tool(tool_name: str, arguments: dict) -> dict:
         server_name = "victoriametrics"
         endpoint = config.mcp_servers["victoriametrics"].endpoint
         log.debug(f"[_execute_tool] Routing to VictoriaMetrics MCP Proxy | endpoint={endpoint}")
+        client = MCPClient(server_name, endpoint)
+    elif tool_name in tempo:
+        server_name = "tempo"
+        endpoint = config.mcp_servers["tempo"].endpoint
+        log.debug(f"[_execute_tool] Routing to Grafana Tempo MCP | endpoint={endpoint}")
         client = MCPClient(server_name, endpoint)
     else:
         log.error(f"[_execute_tool] Unknown tool: {tool_name}")

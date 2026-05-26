@@ -45,6 +45,112 @@ def _load_system_prompt() -> str:
 
 # Tools that the LLM can call (function calling)
 AVAILABLE_TOOLS = [
+    # Grafana Tempo (TraceQL) tools
+    {
+        "type": "function",
+        "function": {
+            "name": "traceql-search",
+            "description": "Search for traces using TraceQL queries.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "TraceQL query string"},
+                    "limit": {"type": "integer", "description": "Maximum number of traces to return (default: 20)"},
+                    "start": {"type": "string", "description": "Start time (ISO 8601 or epoch ms)"},
+                    "end": {"type": "string", "description": "End time (ISO 8601 or epoch ms)"},
+                },
+                "required": ["query"]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "traceql-metrics-instant",
+            "description": "Retrieve a single metric value given a TraceQL metrics query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "TraceQL metrics query string"},
+                    "time": {"type": "string", "description": "Evaluation timestamp (ISO 8601 or epoch ms)"},
+                },
+                "required": ["query"]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "traceql-metrics-range",
+            "description": "Retrieve a metric series given a TraceQL metrics query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "TraceQL metrics query string"},
+                    "start": {"type": "string", "description": "Start time (ISO 8601 or epoch ms)"},
+                    "end": {"type": "string", "description": "End time (ISO 8601 or epoch ms)"},
+                    "step": {"type": "string", "description": "Query resolution step (e.g. '1m', '5m', '1h')"},
+                },
+                "required": ["query", "start"]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get-trace",
+            "description": "Retrieve a specific trace by ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trace_id": {"type": "string", "description": "Trace ID to retrieve"},
+                },
+                "required": ["trace_id"]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get-attribute-names",
+            "description": "Get available attribute names for use in TraceQL queries.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "scope": {"type": "string", "description": "Attribute scope (e.g. 'resource', 'span', 'event', 'link')"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get-attribute-values",
+            "description": "Get values for a specific scoped attribute name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "scope": {"type": "string", "description": "Attribute scope (e.g. 'resource', 'span', 'event', 'link')"},
+                    "attribute": {"type": "string", "description": "Attribute name to get values for"},
+                },
+                "required": ["scope", "attribute"]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "docs-traceql",
+            "description": "Retrieve TraceQL documentation (basic, aggregates, structural, metrics).",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    # ------------------------------------------------------------------
+    # Grafana MCP tools
+    # ------------------------------------------------------------------
     {
         "type": "function",
         "function": {
@@ -487,7 +593,6 @@ class LLMClient:
                 messages=self.conversation_history,
                 tools=AVAILABLE_TOOLS,
                 tool_choice="auto",
-                temperature=0.1,
             )
             api_time = time.time() - start_time
             
@@ -638,7 +743,6 @@ class LLMClient:
                     messages=self.conversation_history,
                     tools=AVAILABLE_TOOLS,
                     tool_choice="auto",
-                    temperature=0.1,
                 )
                 api_time = time.time() - start_time
                 

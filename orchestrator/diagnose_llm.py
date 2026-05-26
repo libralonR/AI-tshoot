@@ -132,7 +132,6 @@ async def test_openai_client():
             model=model,
             messages=[{"role": "user", "content": "test"}],
             max_tokens=5,
-            temperature=0
         )
         elapsed = time.time() - start
         

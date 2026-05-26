@@ -3,7 +3,7 @@
 ## Phase 1: Core Infrastructure (Weeks 1-2)
 
 ### 1. Data Models and Storage
-- [ ] 1.1 Define CaseFile data structure with all required fields (Req 2.3, 16.1-16.8)
+- [x] 1.1 Define CaseFile data structure with all required fields (Req 2.3, 16.1-16.8)
 - [ ] 1.2 Define Evidence data structure with UUID, type, source, query, result, links (Req 5.10, 16.2)
 - [ ] 1.3 Define Hypothesis data structure with confidence scoring (Req 7.6-7.7, 16.3)
 - [ ] 1.4 Define Scope and TimeWindow data structures (Req 3.6, 16.4)
