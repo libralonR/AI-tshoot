@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from agents import GrafanaAgent, IncidentsAgent, MetricsAgent
+from agents import GrafanaAgent, IncidentsAgent, MetricsAgent, TracesAgent
 from config import config
 from correlation import CorrelationEngine
 from guardrails import Guardrails
@@ -362,9 +362,11 @@ class Orchestrator:
         grafana_client = MCPClient("grafana", config.mcp_servers["grafana"].endpoint)
         incidents_client = MCPClient("incidents-pg", config.mcp_servers["incidents-pg"].endpoint)
         vm_client = MCPClient("victoriametrics", config.mcp_servers["victoriametrics"].endpoint, timeout=30)
+        tempo_client = MCPClient("tempo", config.mcp_servers["tempo"].endpoint)
         grafana_agent = GrafanaAgent(grafana_client)
         incidents_agent = IncidentsAgent(incidents_client)
         metrics_agent = MetricsAgent(vm_client)
+        traces_agent = TracesAgent(tempo_client)
 
         # Mapa de nome → índice para logs legíveis
         task_names = []
@@ -433,6 +435,43 @@ class Orchestrator:
                     f"input_type={case_file.input.type} (only runs for ALERT_UID)"
                 )
 
+            # Task: Traces catalog (se tiver service name + catálogo de traces)
+            traces_catalog = getattr(config, "traces_catalog", []) or []
+            has_traces_catalog = bool(ci_name and traces_catalog)
+            if has_traces_catalog:
+                task_names.append("traces:execute_catalog_queries")
+                tasks.append(
+                    traces_agent.execute_catalog_queries(
+                        service_name=ci_name,
+                        catalog=traces_catalog,
+                        time_window_start=case_file.timeWindow.start or None,
+                        time_window_end=case_file.timeWindow.end or None,
+                    )
+                )
+                log.info(
+                    f"[_gather_signals] Queued task: traces:execute_catalog_queries | "
+                    f"service={ci_name} | "
+                    f"queries={len(traces_catalog)} | "
+                    f"endpoint={config.mcp_servers['tempo'].endpoint}"
+                )
+            else:
+                log.info(
+                    f"[_gather_signals] SKIPPED traces catalog — "
+                    f"service={'set' if ci_name else 'MISSING'} | "
+                    f"catalog={'loaded' if traces_catalog else 'EMPTY'} | "
+                    f"catalog_entries={len(traces_catalog)}"
+                )
+
+            # Task: trace_id direto do alerta (se houver)
+            alert_trace_id = self._extract_alert_trace_id(case_file)
+            if alert_trace_id:
+                task_names.append("traces:fetch_trace_id_from_alert")
+                tasks.append(traces_agent.fetch_trace_id_from_alert(alert_trace_id))
+                log.info(
+                    f"[_gather_signals] Queued task: traces:fetch_trace_id_from_alert | "
+                    f"trace_id={alert_trace_id}"
+                )
+
             log.info(
                 f"[_gather_signals] Executing {len(tasks)} parallel tasks: "
                 f"{task_names}"
@@ -463,6 +502,7 @@ class Orchestrator:
             await grafana_client.close()
             await incidents_client.close()
             await vm_client.close()
+            await tempo_client.close()
 
         execution_time = time.time() - start_time
 
@@ -489,6 +529,31 @@ class Orchestrator:
                 result = evidence.result
                 if "data" in result:
                     return result
+        return None
+
+    def _extract_alert_trace_id(self, case_file: CaseFile) -> Optional[str]:
+        """Procura um trace_id no alerta (labels/annotations) para puxar o trace direto.
+
+        Suporta as chaves mais comuns: `trace_id`, `traceID`, `traceId`.
+        Procura tanto no `labels` quanto no `annotations` (ou em campos top-level
+        que alguns alertas trazem como `_parsed`).
+        """
+        if case_file.input.type != InputType.ALERT_UID:
+            return None
+        candidates = ("trace_id", "traceID", "traceId")
+        for evidence in case_file.evidence:
+            if evidence.source != "grafana-mcp" or evidence.type != EvidenceType.ALERT_FIRING:
+                continue
+            result = evidence.result
+            for key in candidates:
+                if result.get(key):
+                    return str(result[key])
+            for bag_key in ("labels", "annotations", "_parsed"):
+                bag = result.get(bag_key)
+                if isinstance(bag, dict):
+                    for key in candidates:
+                        if bag.get(key):
+                            return str(bag[key])
         return None
 
     def _apply_guardrails(self, case_file: CaseFile):

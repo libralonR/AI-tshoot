@@ -1,8 +1,4 @@
-"""Adapter Tempo → TraceSource (TraceQL).
-
-Encapsula chamadas TraceQL ao MCP Tempo (que usa JSON-RPC nativo).
-Equivalente hexagonal do `agents/traces.py` da versão atual.
-"""
+"""Tempo traces specialist agent."""
 
 import json
 import logging
@@ -10,42 +6,25 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from domain.guardrails import Guardrails
-from domain.models import Evidence, EvidenceType
-from infrastructure.mcp_client import MCPClient
+from guardrails import Guardrails
+from mcp_client import MCPClient
+from models import Evidence, EvidenceType
 
 log = logging.getLogger("orchestrator")
 
 
-class TempoTraceAdapter:
-    """TraceSource implementation backed by Grafana Tempo MCP (JSON-RPC)."""
+class TracesAgent:
+    """Specialist agent for Grafana Tempo (TraceQL) queries.
+
+    Tempo é acessado via JSON-RPC MCP nativo (handshake initialize + tools/call).
+    O `MCPClient` cuida do roteamento automaticamente quando `server_name="tempo"`.
+    """
 
     def __init__(self, mcp_client: MCPClient):
         self.mcp = mcp_client
 
     # ------------------------------------------------------------------
-    # Raw queries (compat com chamadas diretas)
-    # ------------------------------------------------------------------
-
-    async def query_traces(
-        self,
-        query: str,
-        limit: int = 20,
-        start: str = "",
-        end: str = "",
-    ) -> Dict[str, Any]:
-        args: Dict[str, Any] = {"query": query, "limit": limit}
-        if start:
-            args["start"] = start
-        if end:
-            args["end"] = end
-        return await self.mcp.call_tool("traceql-search", args)
-
-    async def get_trace(self, trace_id: str) -> Dict[str, Any]:
-        return await self.mcp.call_tool("get-trace", {"trace_id": trace_id})
-
-    # ------------------------------------------------------------------
-    # Evidence-producing helpers (consumidos pelo InvestigateUseCase)
+    # Low-level wrappers em torno das tools do Tempo MCP
     # ------------------------------------------------------------------
 
     async def search_traces(
@@ -55,22 +34,25 @@ class TempoTraceAdapter:
         start: Optional[str] = None,
         end: Optional[str] = None,
     ) -> Optional[Evidence]:
+        """Executa um traceql-search e retorna uma única Evidence agregada."""
         args: Dict[str, Any] = {"query": query, "limit": limit}
         if start:
             args["start"] = start
         if end:
             args["end"] = end
 
-        log.info(f"[TempoTraceAdapter.search_traces] query={query[:120]} | limit={limit}")
+        log.info(f"[TracesAgent.search_traces] query={query[:120]} | limit={limit}")
         result = await self.mcp.call_tool("traceql-search", args)
+
         if not result.get("success", True):
-            log.error(f"[TempoTraceAdapter.search_traces] Failed: {result.get('error')}")
+            log.error(f"[TracesAgent.search_traces] Failed: {result.get('error')}")
             return None
 
         result_str = json.dumps(result, default=str)
         redacted_str, was_redacted = Guardrails.redact_pii(result_str)
         redacted_result = json.loads(redacted_str)
 
+        # Decidir tipo: error vs slow span
         ev_type = (
             EvidenceType.TRACE_ERROR
             if "status = error" in query or "status_code >= 500" in query
@@ -98,10 +80,11 @@ class TempoTraceAdapter:
         if time:
             args["time"] = time
 
-        log.info(f"[TempoTraceAdapter.metrics_instant] query={query[:120]}")
+        log.info(f"[TracesAgent.metrics_instant] query={query[:120]}")
         result = await self.mcp.call_tool("traceql-metrics-instant", args)
+
         if not result.get("success", True):
-            log.error(f"[TempoTraceAdapter.metrics_instant] Failed: {result.get('error')}")
+            log.error(f"[TracesAgent.metrics_instant] Failed: {result.get('error')}")
             return None
 
         result_str = json.dumps(result, default=str)
@@ -131,12 +114,11 @@ class TempoTraceAdapter:
         if end:
             args["end"] = end
 
-        log.info(
-            f"[TempoTraceAdapter.metrics_range] query={query[:120]} | start={start} | step={step}"
-        )
+        log.info(f"[TracesAgent.metrics_range] query={query[:120]} | start={start} | step={step}")
         result = await self.mcp.call_tool("traceql-metrics-range", args)
+
         if not result.get("success", True):
-            log.error(f"[TempoTraceAdapter.metrics_range] Failed: {result.get('error')}")
+            log.error(f"[TracesAgent.metrics_range] Failed: {result.get('error')}")
             return None
 
         result_str = json.dumps(result, default=str)
@@ -155,15 +137,12 @@ class TempoTraceAdapter:
             redacted=was_redacted,
         )
 
-    async def fetch_trace_id_from_alert(self, trace_id: str) -> Optional[Evidence]:
-        if not trace_id:
-            return None
-        log.info(f"[TempoTraceAdapter.fetch_trace_id_from_alert] trace_id={trace_id}")
+    async def get_trace(self, trace_id: str) -> Optional[Evidence]:
+        log.info(f"[TracesAgent.get_trace] trace_id={trace_id}")
         result = await self.mcp.call_tool("get-trace", {"trace_id": trace_id})
+
         if not result.get("success", True):
-            log.error(
-                f"[TempoTraceAdapter.fetch_trace_id_from_alert] Failed: {result.get('error')}"
-            )
+            log.error(f"[TracesAgent.get_trace] Failed: {result.get('error')}")
             return None
 
         result_str = json.dumps(result, default=str)
@@ -182,6 +161,10 @@ class TempoTraceAdapter:
             redacted=was_redacted,
         )
 
+    # ------------------------------------------------------------------
+    # Catalog execution
+    # ------------------------------------------------------------------
+
     async def execute_catalog_queries(
         self,
         service_name: str,
@@ -189,7 +172,16 @@ class TempoTraceAdapter:
         time_window_start: Optional[str] = None,
         time_window_end: Optional[str] = None,
     ) -> List[Evidence]:
+        """Executa todas as queries do traces-catalog para um serviço.
+
+        Cada entry tem:
+          - name, category
+          - kind: search | metrics_instant | metrics_range
+          - query_template (com {service} placeholder)
+          - limit (search) ou step (metrics_range)
+        """
         evidences: List[Evidence] = []
+
         for entry in catalog:
             kind = entry.get("kind")
             name = entry.get("name", "tempo_query")
@@ -197,7 +189,7 @@ class TempoTraceAdapter:
             query = entry["query_template"].replace("{service}", service_name)
 
             log.info(
-                f"[TempoTraceAdapter.execute_catalog_queries] "
+                f"[TracesAgent.execute_catalog_queries] "
                 f"name={name} | kind={kind} | category={category} | query={query[:120]}"
             )
 
@@ -216,7 +208,7 @@ class TempoTraceAdapter:
                 step = entry.get("step", "5m")
                 if not time_window_start:
                     log.warning(
-                        f"[TempoTraceAdapter.execute_catalog_queries] "
+                        f"[TracesAgent.execute_catalog_queries] "
                         f"skip {name}: metrics_range requer time_window_start"
                     )
                     continue
@@ -227,9 +219,7 @@ class TempoTraceAdapter:
                     step=step,
                 )
             else:
-                log.warning(
-                    f"[TempoTraceAdapter.execute_catalog_queries] unknown kind={kind} for {name}"
-                )
+                log.warning(f"[TracesAgent.execute_catalog_queries] unknown kind={kind} for {name}")
                 continue
 
             if evidence:
@@ -237,4 +227,11 @@ class TempoTraceAdapter:
                 evidence.result["_catalog_category"] = category
                 evidence.result["_catalog_kind"] = kind
                 evidences.append(evidence)
+
         return evidences
+
+    async def fetch_trace_id_from_alert(self, trace_id: str) -> Optional[Evidence]:
+        """Atalho para puxar trace direto quando o alerta carrega um trace_id."""
+        if not trace_id:
+            return None
+        return await self.get_trace(trace_id)

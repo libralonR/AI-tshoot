@@ -103,6 +103,7 @@ class Config:
 
         self.steering_context = self._load_steering()
         self.metrics_catalog = self._load_metrics_catalog()
+        self.traces_catalog = self._load_traces_catalog()
 
     def _load_steering(self) -> Dict[str, str]:
         context: Dict[str, str] = {}
@@ -150,6 +151,58 @@ class Config:
         log.info(
             f"[Config] Loaded metrics catalog | total_entries={len(valid)} | "
             f"categories={list(set(e.get('category', '?') for e in valid))}"
+        )
+        return valid
+
+
+    def _load_traces_catalog(self) -> List[Dict[str, str]]:
+        """Carrega o catálogo de queries TraceQL.
+
+        Cada entry deve ter `name`, `kind` (search | metrics_instant | metrics_range)
+        e `query_template`. Search usa `limit`; metrics_range usa `step`.
+        """
+        catalog_file = STEERING_DIR / "traces-catalog.md"
+        if not catalog_file.exists():
+            log.warning(
+                f"[Config] traces-catalog.md NOT FOUND in {STEERING_DIR} — "
+                f"TracesAgent will NOT execute catalog queries during /investigate"
+            )
+            return []
+
+        content = catalog_file.read_text()
+        entries: List[Dict[str, str]] = []
+
+        yaml_blocks = re.findall(r"```yaml\s*\n(.*?)```", content, re.DOTALL)
+        log.info(f"[Config] Found {len(yaml_blocks)} YAML blocks in traces-catalog.md")
+
+        for idx, block in enumerate(yaml_blocks, 1):
+            try:
+                parsed = yaml.safe_load(block)
+                if isinstance(parsed, list):
+                    entries.extend(parsed)
+                    log.info(f"[Config] traces YAML block {idx}: parsed {len(parsed)} entries")
+                else:
+                    log.warning(
+                        f"[Config] traces YAML block {idx}: not a list, got {type(parsed).__name__}"
+                    )
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"[Config] traces YAML block {idx}: parse FAILED — {e}")
+
+        valid: List[Dict[str, str]] = []
+        for entry in entries:
+            if (
+                "query_template" in entry
+                and "name" in entry
+                and entry.get("kind") in ("search", "metrics_instant", "metrics_range")
+            ):
+                valid.append(entry)
+            else:
+                log.warning(f"[Config] Invalid traces catalog entry: {entry}")
+
+        log.info(
+            f"[Config] Loaded traces catalog | total_entries={len(valid)} | "
+            f"categories={list(set(e.get('category', '?') for e in valid))} | "
+            f"kinds={list(set(e.get('kind') for e in valid))}"
         )
         return valid
 

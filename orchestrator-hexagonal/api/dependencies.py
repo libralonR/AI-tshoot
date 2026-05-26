@@ -123,6 +123,21 @@ class _ManagedMetricSource:
             await self._client.close()
 
 
+class _ManagedTraceSource:
+    def __init__(self):
+        self._client: MCPClient | None = None
+        self._adapter: TempoTraceAdapter | None = None
+
+    async def __aenter__(self):
+        self._client = _tempo_client()
+        self._adapter = TempoTraceAdapter(self._client)
+        return self._adapter
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self._client:
+            await self._client.close()
+
+
 # ---------------------------------------------------------------------------
 # Use case factories
 # ---------------------------------------------------------------------------
@@ -146,23 +161,28 @@ class _InvestigateContext:
         self._alerts_cm = _ManagedAlertSource()
         self._incidents_cm = _ManagedIncidentSource()
         self._metrics_cm = _ManagedMetricSource()
+        self._traces_cm = _ManagedTraceSource()
 
         self.alerts = await self._alerts_cm.__aenter__()
         self.incidents = await self._incidents_cm.__aenter__()
         self.metrics = await self._metrics_cm.__aenter__()
+        self.traces = await self._traces_cm.__aenter__()
 
         return InvestigateUseCase(
             alert_source=self.alerts,
             incident_source=self.incidents,
             metric_source=self.metrics,
+            trace_source=self.traces,
             correlation_engine=_correlation_engine,
             hypothesis_generator=_hypothesis_generator,
             guardrails=_guardrails,
             metrics_catalog=config.metrics_catalog,
+            traces_catalog=getattr(config, "traces_catalog", []) or [],
             case_file_repository=_case_file_repository,
         )
 
     async def __aexit__(self, exc_type, exc, tb):
+        await self._traces_cm.__aexit__(exc_type, exc, tb)
         await self._metrics_cm.__aexit__(exc_type, exc, tb)
         await self._incidents_cm.__aexit__(exc_type, exc, tb)
         await self._alerts_cm.__aexit__(exc_type, exc, tb)

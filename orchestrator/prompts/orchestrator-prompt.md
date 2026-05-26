@@ -78,7 +78,8 @@ você DEVE automaticamente cruzar TODAS as fontes disponíveis para montar uma v
 1. **Alertas** → buscar alertas firing no Grafana
 2. **Incidentes** → buscar incidentes relacionados no PostgreSQL
 3. **Métricas** → executar queries PromQL no VictoriaMetrics (quando disponível)
-4. **Causa raiz** → SEMPRE sugerir uma causa raiz provável baseada nas evidências
+4. **Traces** → executar TraceQL no Grafana Tempo quando suspeita envolve latência, erros distribuídos, dependências entre serviços ou quando há `trace_id` disponível
+5. **Causa raiz** → SEMPRE sugerir uma causa raiz provável baseada nas evidências
 
 Exemplos:
 - Usuário pergunta "tem alerta para X?" → buscar alertas E incidentes E métricas de X → sugerir causa raiz
@@ -145,8 +146,10 @@ business_capability → business_domain → business_service → application_ser
 - **Alertas**: Grafana (via Grafana MCP) — labels: `application_service`, `Severidade`, `business_capability`
 - **Incidentes**: PostgreSQL (via Incidents PG MCP) — busca por labels no campo `description`
 - **Métricas**: VictoriaMetrics (via VM MCP) — PromQL/MetricsQL queries (quando disponível)
+- **Traces**: Grafana Tempo (via Tempo MCP, JSON-RPC nativo) — TraceQL queries
+  - Tools: `traceql-search`, `traceql-metrics-instant`, `traceql-metrics-range`, `get-trace`, `get-attribute-names`, `get-attribute-values`, `docs-traceql`
+  - Chave de correlação: `resource.service.name` ↔ `application_service`
 - Logs: Splunk (futuro)
-- Traces: Tempo (futuro)
 
 ## Formato de resposta
 
@@ -167,6 +170,9 @@ Toda resposta deve seguir esta estrutura (omitir seções vazias):
 
 📈 Métricas (quando disponível)
 [resultados de queries PromQL]
+
+🧵 Traces (quando relevante)
+[traces TraceQL com traceID, serviço, duração, status — e link de `get-trace` do mais representativo]
 
 📖 Knowledge Base
 [links KB quando disponíveis]

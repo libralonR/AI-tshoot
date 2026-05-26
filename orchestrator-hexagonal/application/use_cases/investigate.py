@@ -19,6 +19,7 @@ from application.ports import (
     CaseFileRepository,
     IncidentSource,
     MetricSource,
+    TraceSource,
 )
 from domain.correlation import CorrelationEngine
 from domain.guardrails import Guardrails
@@ -53,15 +54,19 @@ class InvestigateUseCase:
         hypothesis_generator: HypothesisGenerator,
         guardrails: Guardrails,
         metrics_catalog: List[Dict[str, str]],
+        trace_source: Optional[TraceSource] = None,
+        traces_catalog: Optional[List[Dict[str, Any]]] = None,
         case_file_repository: Optional[CaseFileRepository] = None,
     ):
         self.alerts = alert_source
         self.incidents = incident_source
         self.metrics = metric_source
+        self.traces = trace_source
         self.correlation_engine = correlation_engine
         self.hypothesis_generator = hypothesis_generator
         self.guardrails = guardrails
         self.metrics_catalog = metrics_catalog
+        self.traces_catalog = traces_catalog or []
         self.repo = case_file_repository
 
     # ------------------------------------------------------------------
@@ -293,6 +298,25 @@ class InvestigateUseCase:
             task_names.append("metrics:execute_alert_expression")
             tasks.append(self.metrics.execute_alert_expression(alert_data))
 
+        # Traces catalog (se houver service + traces_catalog + adapter de traces)
+        has_traces_catalog = bool(ci_name and self.traces and self.traces_catalog)
+        if has_traces_catalog:
+            task_names.append("traces:execute_catalog_queries")
+            tasks.append(
+                self.traces.execute_catalog_queries(
+                    service_name=ci_name,
+                    catalog=self.traces_catalog,
+                    time_window_start=case_file.timeWindow.start or None,
+                    time_window_end=case_file.timeWindow.end or None,
+                )
+            )
+
+        # trace_id direto do alerta (atalho para puxar trace específico)
+        alert_trace_id = self._extract_alert_trace_id(case_file)
+        if alert_trace_id and self.traces:
+            task_names.append("traces:fetch_trace_id_from_alert")
+            tasks.append(self.traces.fetch_trace_id_from_alert(alert_trace_id))
+
         log.info(f"[_gather_signals] Executing {len(tasks)} parallel tasks: {task_names}")
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -330,6 +354,29 @@ class InvestigateUseCase:
             ):
                 if "data" in evidence.result:
                     return evidence.result
+        return None
+
+    def _extract_alert_trace_id(self, case_file: CaseFile) -> Optional[str]:
+        """Procura trace_id no alerta para puxar trace direto via Tempo."""
+        if case_file.input.type != InputType.ALERT_UID:
+            return None
+        candidates = ("trace_id", "traceID", "traceId")
+        for evidence in case_file.evidence:
+            if (
+                evidence.source != "grafana-mcp"
+                or evidence.type != EvidenceType.ALERT_FIRING
+            ):
+                continue
+            result = evidence.result
+            for key in candidates:
+                if result.get(key):
+                    return str(result[key])
+            for bag_key in ("labels", "annotations", "_parsed"):
+                bag = result.get(bag_key)
+                if isinstance(bag, dict):
+                    for key in candidates:
+                        if bag.get(key):
+                            return str(bag[key])
         return None
 
     def _apply_guardrails(self, case_file: CaseFile) -> None:
