@@ -205,6 +205,20 @@ independente do hexagonal e continua sendo um ponto forte da plataforma:
 permite escalar cada fonte de telemetria de forma autônoma, isolar falhas
 e atualizar adapters sem redeploy do orchestrator.
 
+### Coexistência das duas versões
+
+Para preservar a versão atual em produção e permitir testes lado a lado,
+a reforma vive em uma pasta paralela:
+
+| Pasta | Estado | Quando usar |
+|-------|--------|-------------|
+| `orchestrator/` | versão atual, intacta | produção e testes do time |
+| `orchestrator-hexagonal/` | versão hexagonal | validação da nova organização |
+
+Ambas expõem **as mesmas rotas HTTP**, **as mesmas métricas Prometheus
+`observa_*`** e **as mesmas env vars**. Para alternar entre uma e outra
+basta apontar a imagem Docker no manifesto K8s.
+
 ---
 
 ## Plano de Evolução Incremental

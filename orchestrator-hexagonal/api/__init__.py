@@ -1,0 +1,1 @@
+"""Driving adapter HTTP."""
