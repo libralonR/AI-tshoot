@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Roadmap — Observability Troubleshooting Copilot</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0d0d10;
+    --surface:  #141418;
+    --border:   rgba(255,255,255,0.07);
+    --text:     #e0e0e0;
+    --muted:    #555;
+    --green:    #00e87a;
+    --blue:     #4da6ff;
+    --purple:   #b08dff;
+    --red:      #ff6b6b;
+    --yellow:   #ffd166;
+    --font:     'IBM Plex Sans', sans-serif;
+    --mono:     'IBM Plex Mono', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    min-height: 100vh;
+    padding: 40px 28px 80px;
+  }
+
+  /* ── HEADER ── */
+  .header { max-width: 780px; margin: 0 auto 40px; }
+  .header-eyebrow {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; margin-bottom: 10px;
+  }
+  .dot-live {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 8px var(--green);
+  }
+  .header h1 {
+    font-size: 26px; font-weight: 700; letter-spacing: -.03em; color: #f5f5f5;
+    margin-bottom: 24px;
+  }
+  .header-meta {
+    display: flex; align-items: center; gap: 28px; flex-wrap: wrap;
+  }
+  .meta-block label {
+    display: block; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .1em; color: var(--muted); margin-bottom: 4px;
+  }
+  .meta-block .val {
+    font-size: 14px; font-weight: 600; color: var(--text);
+  }
+  .meta-block .val.accent { color: var(--purple); }
+
+  /* overall progress */
+  .overall-bar-wrap {
+    display: flex; align-items: center; gap: 12px; flex: 1; min-width: 200px;
+  }
+  .bar-track {
+    flex: 1; height: 4px; background: rgba(255,255,255,0.07);
+    border-radius: 99px; overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%; border-radius: 99px;
+    background: linear-gradient(90deg, var(--green), var(--blue), var(--purple));
+    transition: width .5s cubic-bezier(.4,0,.2,1);
+  }
+  .bar-label { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+  /* ── LAYOUT ── */
+  .main { max-width: 780px; margin: 0 auto; }
+
+  /* ── SECTION TITLE ── */
+  .section-title {
+    font-size: 10px; font-weight: 700; letter-spacing: .14em;
+    text-transform: uppercase; color: #333; margin-bottom: 12px;
+  }
+
+  /* ── SPRINT CARD ── */
+  .sprint-card {
+    border: 1px solid var(--border);
+    border-radius: 14px; overflow: hidden;
+    margin-bottom: 10px;
+    transition: border-color .2s;
+  }
+  .sprint-card.active  { border-color: rgba(0,232,122,.2); }
+  .sprint-card.done    { border-color: rgba(176,141,255,.2); }
+  .sprint-card.upcoming{ border-color: rgba(77,166,255,.12); }
+
+  .sprint-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 22px; cursor: pointer; user-select: none;
+    background: rgba(255,255,255,0.02);
+    transition: background .15s;
+  }
+  .sprint-header:hover { background: rgba(255,255,255,0.04); }
+
+  .sprint-header-left { display: flex; flex-direction: column; gap: 4px; }
+  .sprint-badge-row { display: flex; align-items: center; gap: 8px; }
+  .sprint-label {
+    font-size: 10px; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  .badge {
+    font-size: 10px; padding: 2px 8px; border-radius: 99px;
+    font-weight: 600; letter-spacing: .04em;
+  }
+  .badge-active  { background: rgba(0,232,122,.12);  color: var(--green);  }
+  .badge-done    { background: rgba(176,141,255,.12); color: var(--purple); }
+  .badge-upcoming{ background: rgba(77,166,255,.10);  color: var(--blue);   }
+  .sprint-name { font-size: 16px; font-weight: 600; letter-spacing: -.02em; color: #f0f0f0; }
+
+  .sprint-header-right { text-align: right; display: flex; flex-direction: column; gap: 2px; align-items: flex-end; }
+  .sprint-release { font-size: 18px; font-weight: 700; font-family: var(--mono); }
+  .sprint-period  { font-size: 11px; color: var(--muted); }
+  .sprint-chevron { font-size: 14px; color: var(--muted); margin-left: 16px; transition: transform .25s; }
+  .sprint-card.open .sprint-chevron { transform: rotate(180deg); }
+
+  .sprint-progress { padding: 0 22px 16px; background: rgba(255,255,255,0.02); }
+  .sprint-prog-row {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .sprint-prog-count { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+  /* ── TASKS ── */
+  .tasks-body {
+    display: none; padding: 0 22px 20px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+  .sprint-card.open .tasks-body { display: block; }
+
+  .week-label {
+    font-size: 10px; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: #333; padding: 16px 0 10px;
+  }
+
+  .task-row {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 7px 8px; border-radius: 8px; cursor: pointer;
+    transition: background .12s;
+  }
+  .task-row:hover { background: rgba(255,255,255,0.04); }
+  .task-row.done  { background: rgba(176,141,255,.04); }
+
+  .checkbox {
+    width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0;
+    margin-top: 2px; border: 1.5px solid rgba(255,255,255,.2);
+    display: flex; align-items: center; justify-content: center;
+    transition: all .18s; background: transparent;
+  }
+  .task-row.done .checkbox {
+    background: var(--purple); border-color: var(--purple);
+  }
+  .checkbox svg { display: none; }
+  .task-row.done .checkbox svg { display: block; }
+
+  .task-text {
+    font-size: 13px; color: #ccc; line-height: 1.45;
+    transition: color .15s;
+  }
+  .task-row.done .task-text { color: #555; text-decoration: line-through; }
+  .task-file {
+    font-family: var(--mono); font-size: 10px; color: #383838; margin-top: 2px;
+  }
+
+  /* ── BACKLOG ── */
+  .backlog-table {
+    width: 100%; border-collapse: collapse;
+    border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+  }
+  .backlog-table th {
+    font-size: 10px; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: #333;
+    padding: 10px 16px; text-align: left;
+    background: rgba(255,255,255,0.02);
+    border-bottom: 1px solid var(--border);
+  }
+  .backlog-table td {
+    padding: 10px 16px; font-size: 13px; color: #999;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .backlog-table tr:last-child td { border-bottom: none; }
+  .backlog-table tr:nth-child(even) td { background: rgba(255,255,255,0.01); }
+
+  .tag {
+    display: inline-block; font-size: 10px; font-weight: 600;
+    padding: 2px 8px; border-radius: 99px; letter-spacing: .04em;
+  }
+  .tag-alta   { background: rgba(255,107,107,.12); color: var(--red); }
+  .tag-media  { background: rgba(255,209,102,.10); color: var(--yellow); }
+  .tag-baixa  { background: rgba(255,255,255,.06); color: #555; }
+  .tag-3m     { background: rgba(0,232,122,.08);   color: var(--green); }
+  .tag-6m     { background: rgba(77,166,255,.08);  color: var(--blue); }
+
+  /* ── FOOTER NOTE ── */
+  .footer-note {
+    text-align: center; font-size: 11px; color: #2a2a2a;
+    margin-top: 28px;
+  }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-eyebrow">
+    <span class="dot-live"></span>
+    Observability Troubleshooting Copilot
+  </div>
+  <h1>Roadmap Tracker</h1>
+  <div class="header-meta">
+    <div class="meta-block">
+      <label>Versão atual</label>
+      <div class="val accent" id="current-version">v1.1.0</div>
+    </div>
+    <div class="meta-block">
+      <label>Próxima release</label>
+      <div class="val" id="next-release">v1.2.0</div>
+    </div>
+    <div class="meta-block" style="flex:1; min-width:200px;">
+      <label>Progresso geral — <span id="progress-label">0/0 tarefas</span></label>
+      <div class="overall-bar-wrap">
+        <div class="bar-track">
+          <div class="bar-fill" id="overall-bar" style="width:0%"></div>
+        </div>
+        <span class="bar-label" id="overall-pct">0%</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="main">
+
+  <!-- SPRINTS -->
+  <div class="section-title">Sprints</div>
+  <div id="sprints-container"></div>
+
+  <!-- BACKLOG -->
+  <div class="section-title" style="margin-top:36px">Backlog Futuro</div>
+  <table class="backlog-table" id="backlog-table">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>Horizonte</th>
+        <th>Prioridade</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <p class="footer-note">Clique no sprint para expandir · Clique na tarefa para marcar concluída · Dados salvos no navegador</p>
+</main>
+
+<script>
+// ── DATA ──────────────────────────────────────────────────────────────────
+const SPRINTS = [
+  {
+    id: "s1",
+    name: "Sprint 1", subtitle: "Fundação",
+    release: "v1.2.0", period: "14 abr → 25 abr 2026",
+    status: "active",
+    tasks: [
+      { id:"s1-1", week:1, text:"Setup pytest, pytest-asyncio, pytest-cov",          file:"requirements-dev.txt" },
+      { id:"s1-2", week:1, text:"Estrutura tests/unit/, integration/, e2e/",          file:"tests/" },
+      { id:"s1-3", week:1, text:"Configurar pytest.ini e coverage",                   file:"pytest.ini" },
+      { id:"s1-4", week:1, text:"Unit tests para correlation.py",                     file:"tests/unit/test_correlation.py" },
+      { id:"s1-5", week:1, text:"Unit tests para guardrails.py",                      file:"tests/unit/test_guardrails.py" },
+      { id:"s1-6", week:1, text:"Unit tests para hypothesis.py",                      file:"tests/unit/test_hypothesis.py" },
+      { id:"s1-7", week:1, text:"Criar orchestrator/metrics.py",                      file:"orchestrator/metrics.py", done:true },
+      { id:"s1-8", week:1, text:"Decorators @track_investigation, @track_mcp_call",   file:"orchestrator/metrics.py" },
+      { id:"s1-9", week:1, text:"Endpoint /metrics",                                  file:"orchestrator/orchestrator.py" },
+      { id:"s1-10",week:2, text:"Criar rate_limiter.py (in-memory)",                  file:"orchestrator/rate_limiter.py" },
+      { id:"s1-11",week:2, text:"Rate limiting no /chat + headers X-RateLimit",       file:"orchestrator/orchestrator.py" },
+      { id:"s1-12",week:2, text:"Instalar circuitbreaker + resilience.py",            file:"orchestrator/resilience.py" },
+      { id:"s1-13",week:2, text:"Circuit breaker nas chamadas MCP",                   file:"orchestrator/agents/" },
+      { id:"s1-14",week:2, text:"health.py + endpoint /health/detailed",              file:"orchestrator/health.py" },
+    ]
+  },
+  {
+    id: "s2",
+    name: "Sprint 2", subtitle: "Capacidades",
+    release: "v1.3.0", period: "28 abr → 09 mai 2026",
+    status: "upcoming",
+    tasks: [
+      { id:"s2-1", week:1, text:"Busca expandida de incidentes (multi-label)",         file:"mcp-servers/incidents_pg.py" },
+      { id:"s2-2", week:1, text:"Suporte a business_capability, owner_squad, etc.",    file:"mcp-servers/incidents_pg.py" },
+      { id:"s2-3", week:1, text:"Atualizar tool definitions no llm_client.py",         file:"orchestrator/llm_client.py" },
+      { id:"s2-4", week:1, text:"Atualizar system prompt",                             file:"orchestrator/prompts/orchestrator-prompt.md" },
+      { id:"s2-5", week:1, text:"Testes unitários para nova lógica de busca",          file:"tests/unit/" },
+      { id:"s2-6", week:1, text:"Testes de integração PostgreSQL",                     file:"tests/integration/" },
+      { id:"s2-7", week:2, text:"Setup Redis no docker-compose",                       file:"docker-compose.yaml" },
+      { id:"s2-8", week:2, text:"Cache para resultados MCP (TTL configurável)",        file:"orchestrator/cache.py" },
+      { id:"s2-9", week:2, text:"Connection pool PostgreSQL",                          file:"mcp-servers/incidents_pg.py" },
+      { id:"s2-10",week:2, text:"Load tests com locust (meta: 100 req/s)",             file:"tests/load/locustfile.py" },
+      { id:"s2-11",week:2, text:"Documentar resultados de load test",                  file:"docs/LOAD_TEST_RESULTS.md" },
+    ]
+  },
+  {
+    id: "s3",
+    name: "Sprint 3", subtitle: "Produção",
+    release: "v1.4.0", period: "12 mai → 23 mai 2026",
+    status: "upcoming",
+    tasks: [
+      { id:"s3-1", week:1, text:"Schema PostgreSQL para CaseFiles",                    file:"migrations/" },
+      { id:"s3-2", week:1, text:"orchestrator/storage.py (save / get / list)",         file:"orchestrator/storage.py" },
+      { id:"s3-3", week:1, text:"Endpoint /casefile/{id} com storage real",            file:"orchestrator/orchestrator.py" },
+      { id:"s3-4", week:1, text:"CI/CD pipeline (.github/workflows/ci.yml)",           file:".github/workflows/ci.yml" },
+      { id:"s3-5", week:1, text:"Quality gate: coverage ≥ 80% bloqueia merge",        file:".github/workflows/ci.yml" },
+      { id:"s3-6", week:2, text:"OpenAPI / Swagger completo em /docs",                 file:"orchestrator/orchestrator.py" },
+      { id:"s3-7", week:2, text:"Dashboard Grafana para métricas observa_*",           file:"k8s/grafana-dashboards/" },
+      { id:"s3-8", week:2, text:"Alertas: latência > 5s, error rate > 5%",            file:"k8s/grafana-dashboards/" },
+      { id:"s3-9", week:2, text:"Runbooks operacionais + on-call playbook",            file:"docs/RUNBOOKS.md" },
+    ]
+  }
+];
+
+const BACKLOG = [
+  { text:"Integrar Tempo MCP (traces distribuídos)",    horizon:"3m", priority:"Alta" },
+  { text:"Integrar Splunk MCP (logs)",                  horizon:"3m", priority:"Alta" },
+  { text:"ML para ranking de hipóteses",                horizon:"6m", priority:"Alta" },
+  { text:"Feedback loop (usuários avaliam hipóteses)",  horizon:"6m", priority:"Alta" },
+  { text:"Redaction de CPF/CNPJ (compliance BR)",      horizon:"3m", priority:"Alta" },
+  { text:"Auto-remediation com aprovação humana",       horizon:"6m", priority:"Média" },
+  { text:"Interface web para /chat",                    horizon:"3m", priority:"Média" },
+  { text:"Multi-tenancy por squad",                     horizon:"6m", priority:"Média" },
+  { text:"GDPR / SOC 2 compliance",                     horizon:"6m", priority:"Baixa" },
+];
+
+const WEEK_LABELS = { 1: "Semana 1", 2: "Semana 2" };
+
+// ── STORAGE ───────────────────────────────────────────────────────────────
+const STORE_KEY = "copilot_roadmap_v1";
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function saveState(state) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch {}
+}
+
+// Merge saved done-state into SPRINTS
+let state = loadState(); // { taskId: true/false }
+
+SPRINTS.forEach(s => s.tasks.forEach(t => {
+  if (t.id in state) t.done = state[t.id];
+  else if (t.done) state[t.id] = true;
+}));
+
+// ── STATUS CONFIG ─────────────────────────────────────────────────────────
+const STATUS = {
+  active:   { label:"Em andamento", badge:"badge-active",   color:"var(--green)",  labelColor:"var(--green)"  },
+  upcoming: { label:"Planejado",    badge:"badge-upcoming", color:"var(--blue)",   labelColor:"var(--blue)"   },
+  done:     { label:"Concluído",    badge:"badge-done",     color:"var(--purple)", labelColor:"var(--purple)" },
+};
+
+// ── RENDER ────────────────────────────────────────────────────────────────
+function renderAll() {
+  renderSprints();
+  renderBacklog();
+  updateOverall();
+}
+
+function renderSprints() {
+  const container = document.getElementById("sprints-container");
+  container.innerHTML = "";
+
+  SPRINTS.forEach((sprint, idx) => {
+    const cfg = STATUS[sprint.status];
+    const done  = sprint.tasks.filter(t => t.done).length;
+    const total = sprint.tasks.length;
+    const pct   = total ? Math.round((done / total) * 100) : 0;
+    const isOpen = idx === 0; // first open by default
+
+    // weeks
+    const weeks = [...new Set(sprint.tasks.map(t => t.week))].sort();
+
+    const card = document.createElement("div");
+    card.className = `sprint-card ${sprint.status}${isOpen ? " open" : ""}`;
+    card.id = `card-${sprint.id}`;
+
+    card.innerHTML = `
+      <div class="sprint-header" onclick="toggleSprint('${sprint.id}')">
+        <div class="sprint-header-left">
+          <div class="sprint-badge-row">
+            <span class="sprint-label" style="color:${cfg.labelColor}">${sprint.name}</span>
+            <span class="badge ${cfg.badge}">${cfg.label}</span>
+          </div>
+          <div class="sprint-name">${sprint.subtitle}</div>
+        </div>
+        <div style="display:flex;align-items:center">
+          <div class="sprint-header-right">
+            <div class="sprint-release" style="color:${cfg.labelColor}">${sprint.release}</div>
+            <div class="sprint-period">${sprint.period}</div>
+          </div>
+          <span class="sprint-chevron">▾</span>
+        </div>
+      </div>
+
+      <div class="sprint-progress">
+        <div class="sprint-prog-row">
+          <div class="bar-track" style="flex:1">
+            <div class="bar-fill" id="bar-${sprint.id}" style="width:${pct}%;background:${
+              pct === 100
+                ? "var(--purple)"
+                : sprint.status === "active"
+                  ? "linear-gradient(90deg,var(--green),var(--blue))"
+                  : "var(--blue)"
+            }"></div>
+          </div>
+          <span class="sprint-prog-count" id="count-${sprint.id}">${done}/${total} tarefas</span>
+        </div>
+      </div>
+
+      <div class="tasks-body">
+        ${weeks.map(w => `
+          <div class="week-label">${WEEK_LABELS[w]}</div>
+          ${sprint.tasks.filter(t => t.week === w).map(task => `
+            <div class="task-row${task.done ? " done" : ""}" id="task-${task.id}" onclick="toggleTask('${sprint.id}','${task.id}')">
+              <div class="checkbox">
+                <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
+                  <path d="M1 3.5L3.5 6L8 1" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+              <div>
+                <div class="task-text">${task.text}</div>
+                <div class="task-file">${task.file}</div>
+              </div>
+            </div>
+          `).join("")}
+        `).join("")}
+      </div>
+    `;
+
+    container.appendChild(card);
+  });
+}
+
+function renderBacklog() {
+  const tbody = document.querySelector("#backlog-table tbody");
+  tbody.innerHTML = BACKLOG.map(item => `
+    <tr>
+      <td>${item.text}</td>
+      <td><span class="tag tag-${item.horizon}">${item.horizon === "3m" ? "3 meses" : "6 meses"}</span></td>
+      <td><span class="tag tag-${item.priority.toLowerCase()}">${item.priority}</span></td>
+    </tr>
+  `).join("");
+}
+
+function updateOverall() {
+  const allTasks  = SPRINTS.flatMap(s => s.tasks);
+  const totalDone = allTasks.filter(t => t.done).length;
+  const total     = allTasks.length;
+  const pct       = total ? Math.round((totalDone / total) * 100) : 0;
+
+  document.getElementById("overall-bar").style.width = pct + "%";
+  document.getElementById("overall-pct").textContent = pct + "%";
+  document.getElementById("progress-label").textContent = `${totalDone}/${total} tarefas`;
+}
+
+// ── INTERACTIONS ──────────────────────────────────────────────────────────
+function toggleSprint(id) {
+  const card = document.getElementById(`card-${id}`);
+  card.classList.toggle("open");
+}
+
+function toggleTask(sprintId, taskId) {
+  const sprint = SPRINTS.find(s => s.id === sprintId);
+  const task   = sprint.tasks.find(t => t.id === taskId);
+  task.done = !task.done;
+
+  // save
+  state[taskId] = task.done;
+  saveState(state);
+
+  // update task row
+  const row = document.getElementById(`task-${taskId}`);
+  row.classList.toggle("done", task.done);
+
+  // update sprint bar + count
+  const done  = sprint.tasks.filter(t => t.done).length;
+  const total = sprint.tasks.length;
+  const pct   = total ? Math.round((done / total) * 100) : 0;
+  const bar   = document.getElementById(`bar-${sprintId}`);
+  bar.style.width = pct + "%";
+  if (pct === 100) bar.style.background = "var(--purple)";
+  document.getElementById(`count-${sprintId}`).textContent = `${done}/${total} tarefas`;
+
+  updateOverall();
+}
+
+// ── BOOT ──────────────────────────────────────────────────────────────────
+renderAll();
+</script>
+</body>
+</html>
