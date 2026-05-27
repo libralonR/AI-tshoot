@@ -1,0 +1,53 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: logs-mcp-server
+  namespace: observability
+  labels:
+    app: logs-mcp-server
+    component: mcp-server
+spec:
+  podSelector:
+    matchLabels:
+      app: logs-mcp-server
+
+  policyTypes:
+  - Ingress
+  - Egress
+
+  ingress:
+  - from:
+    # Pods do orchestrator (namespace copilot)
+    - namespaceSelector:
+        matchLabels:
+          name: copilot
+    # Pods marcados explicitamente para acessar este MCP
+    - podSelector:
+        matchLabels:
+          access-logs-mcp: "true"
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  egress:
+  # DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+
+  # AWS S3 + STS (HTTPS).
+  # Em clusters com VPC Endpoints para S3 e STS, ajuste o ipBlock para
+  # restringir o egress aos endpoints internos.
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443

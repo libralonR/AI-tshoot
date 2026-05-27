@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: logs-mcp-server
+  namespace: observability
+  labels:
+    app: logs-mcp-server
+    component: mcp-server
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: logs-mcp-server

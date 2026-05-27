@@ -1,0 +1,210 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logs-mcp-server
+  namespace: observability
+  labels:
+    app: logs-mcp-server
+    component: mcp-server
+    tier: backend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: logs-mcp-server
+  template:
+    metadata:
+      labels:
+        app: logs-mcp-server
+        component: mcp-server
+        tier: backend
+      annotations:
+        # Útil quando o orchestrator/Prometheus quiser scrapear /metrics
+        # (futuro — ainda não implementado neste MCP).
+        prometheus.io/scrape: "false"
+    spec:
+      serviceAccountName: logs-mcp-server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+      - name: logs-mcp
+        image: your-registry/logs-mcp-server:latest
+        imagePullPolicy: Always
+
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+
+        env:
+        # ---------------- runtime ----------------
+        - name: MCP_SERVER_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: mcp-server-mode
+        - name: MCP_LISTEN_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: mcp-listen-port
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: log-level
+
+        # ---------------- S3 / AWS ----------------
+        - name: LOGS_S3_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-s3-bucket
+        - name: LOGS_AWS_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-aws-region
+        - name: LOGS_ROLE_ARN
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-role-arn
+              optional: true
+        - name: LOGS_ROLE_SESSION_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-role-session-name
+        - name: LOGS_ROLE_DURATION_SECONDS
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-role-duration-seconds
+
+        # ---------------- limites ----------------
+        - name: LOGS_DEFAULT_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-default-limit
+        - name: LOGS_MAX_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-max-limit
+        - name: LOGS_MAX_WINDOW_HOURS
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-max-window-hours
+        - name: LOGS_MAX_PARTITIONS
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-max-partitions
+        - name: LOGS_SCHEMA_CACHE_TTL_SECONDS
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-schema-cache-ttl-seconds
+        - name: LOGS_DUCKDB_THREADS
+          valueFrom:
+            configMapKeyRef:
+              name: logs-mcp-config
+              key: logs-duckdb-threads
+
+        # ---------------- AWS keys (fallback - opcionais) ----------------
+        # Em produção, prefira IRSA (annotation no SA). Estas keys só
+        # entram em jogo quando IRSA não está disponível.
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: logs-mcp-secrets
+              key: aws-access-key-id
+              optional: true
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: logs-mcp-secrets
+              key: aws-secret-access-key
+              optional: true
+
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+
+        # DuckDB usa /tmp para spilling — montamos um emptyDir writable.
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: home
+          mountPath: /home/mcp
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 3
+
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: home
+        emptyDir:
+          sizeLimit: 64Mi
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - logs-mcp-server
+              topologyKey: kubernetes.io/hostname
+
+      tolerations:
+      - key: "observability"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"

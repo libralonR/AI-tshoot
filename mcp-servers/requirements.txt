@@ -2,3 +2,7 @@ httpx>=0.25.0
 mcp>=1.0.0
 psycopg[binary]>=3.1.0
 psycopg-pool>=3.1.0
+
+# Logs Parquet MCP
+duckdb>=1.0.0
+boto3>=1.34.0

@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logs-mcp-config
+  namespace: observability
+  labels:
+    app: logs-mcp-server
+    component: mcp-server
+data:
+  # ---------------------------------------------------------------------
+  # S3 / AWS
+  # ---------------------------------------------------------------------
+  logs-s3-bucket: "observability-data-log"
+  logs-aws-region: "us-east-1"
+
+  # AssumeRole opcional (deixar vazio quando IRSA já tem permissão direta no S3)
+  # logs-role-arn: "arn:aws:iam::123456789012:role/observability-logs-reader"
+  logs-role-arn: ""
+  logs-role-session-name: "logs-parquet-mcp"
+  logs-role-duration-seconds: "3600"
+
+  # ---------------------------------------------------------------------
+  # MCP server runtime
+  # ---------------------------------------------------------------------
+  mcp-server-mode: "sse"
+  mcp-listen-port: "8080"
+  log-level: "INFO"
+
+  # ---------------------------------------------------------------------
+  # Limites (ajuste conforme volume / SLA)
+  # ---------------------------------------------------------------------
+  logs-default-limit: "500"
+  logs-max-limit: "1000"
+  logs-max-window-hours: "24"
+  logs-max-partitions: "24"
+  logs-schema-cache-ttl-seconds: "3600"
+  logs-duckdb-threads: "4"

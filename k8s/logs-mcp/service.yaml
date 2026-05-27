@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: logs-mcp-server
+  namespace: observability
+  labels:
+    app: logs-mcp-server
+    component: mcp-server
+spec:
+  type: ClusterIP
+  selector:
+    app: logs-mcp-server
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
