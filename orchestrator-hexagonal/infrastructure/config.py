@@ -58,7 +58,7 @@ class Config:
             "tempo": MCPServerConfig(
                 endpoint=os.getenv(
                     "TEMPO_MCP_ENDPOINT",
-                    "http://tempo-mcp-server.observability.svc.cluster.local:8080",
+                    "http://tempo-mcp.mcp-observability.svc.cluster.local:3100",
                 ),
                 timeout=15,
             ),
@@ -75,6 +75,13 @@ class Config:
                     "http://athena-mcp-server.observability.svc.cluster.local:8080",
                 ),
                 timeout=60,
+            ),
+            "logs": MCPServerConfig(
+                endpoint=os.getenv(
+                    "LOGS_MCP_ENDPOINT",
+                    "http://logs-mcp-server.observability.svc.cluster.local:8080",
+                ),
+                timeout=30,
             ),
         }
 

@@ -241,6 +241,12 @@ TEMPO_TOOLS = {
     "get-attribute-values",
     "docs-traceql",
 }
+SPLUNK_TOOLS = {"splunk_search", "splunk_errors", "splunk_patterns"}
+
+
+def _splunk_client() -> MCPClient:
+    cfg = config.mcp_servers["splunk"]
+    return MCPClient("splunk", cfg.endpoint, cfg.timeout)
 
 
 async def execute_tool(tool_name: str, arguments: dict) -> dict:
@@ -264,6 +270,36 @@ async def execute_tool(tool_name: str, arguments: dict) -> dict:
     elif tool_name in TEMPO_TOOLS:
         client = _tempo_client()
         server_name = "tempo"
+    elif tool_name in SPLUNK_TOOLS:
+        # Strip prefix: splunk_search → search, splunk_errors → errors
+        actual_tool = tool_name.replace("splunk_", "")
+        client = _splunk_client()
+        server_name = "splunk"
+        try:
+            result = await client.call_tool(actual_tool, arguments)
+            result_str, redacted = Guardrails.redact_pii(json.dumps(result, default=str))
+            result = json.loads(result_str)
+            if redacted:
+                PII_REDACTIONS.inc()
+            execution_time = time.time() - start_time
+            MCP_CALL_DURATION.labels(server=server_name, tool=actual_tool, status="success").observe(execution_time)
+            MCP_CALL_TOTAL.labels(server=server_name, tool=actual_tool, status="success").inc()
+            log.info(
+                f"[execute_tool] OK | tool={actual_tool} | server={server_name} | "
+                f"execution_time={execution_time:.3f}s | pii_redacted={redacted}"
+            )
+            return result
+        except Exception as e:  # noqa: BLE001
+            execution_time = time.time() - start_time
+            MCP_CALL_DURATION.labels(server=server_name, tool=actual_tool, status="error").observe(execution_time)
+            MCP_CALL_TOTAL.labels(server=server_name, tool=actual_tool, status="error").inc()
+            log.error(
+                f"[execute_tool] FAILED | tool={actual_tool} | server={server_name} | "
+                f"execution_time={execution_time:.3f}s | error={str(e)[:200]}"
+            )
+            return {"error": f"Tool execution failed: {str(e)}"}
+        finally:
+            await client.close()
     else:
         log.error(f"[execute_tool] Unknown tool: {tool_name}")
         return {"error": f"Unknown tool: {tool_name}"}

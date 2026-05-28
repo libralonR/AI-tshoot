@@ -500,6 +500,88 @@ AVAILABLE_TOOLS = [
             },
         },
     },
+    # ------------------------------------------------------------------
+    # Splunk MCP tools
+    # ------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "splunk_search",
+            "description": "Execute an arbitrary SPL query against Splunk.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "SPL query string",
+                    },
+                    "earliest_time": {
+                        "type": "string",
+                        "description": "Start time (default -1h)",
+                    },
+                    "latest_time": {
+                        "type": "string",
+                        "description": "End time (default now)",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max results (default 100, max 10000)",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "splunk_errors",
+            "description": "Find top error patterns for a service in Splunk logs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "application_service": {
+                        "type": "string",
+                        "description": "Service name",
+                    },
+                    "earliest_time": {
+                        "type": "string",
+                    },
+                    "latest_time": {
+                        "type": "string",
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": "Top N patterns (default 10)",
+                    },
+                },
+                "required": ["application_service"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "splunk_patterns",
+            "description": "Find log patterns using Splunk cluster command.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "application_service": {
+                        "type": "string",
+                        "description": "Service name",
+                    },
+                    "earliest_time": {
+                        "type": "string",
+                    },
+                    "latest_time": {
+                        "type": "string",
+                    },
+                },
+                "required": ["application_service"],
+            },
+        },
+    },
 ]
 
 

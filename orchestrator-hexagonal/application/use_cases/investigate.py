@@ -56,17 +56,23 @@ class InvestigateUseCase:
         metrics_catalog: List[Dict[str, str]],
         trace_source: Optional[TraceSource] = None,
         traces_catalog: Optional[List[Dict[str, Any]]] = None,
+        splunk_source: Optional[Any] = None,
+        logs_parquet_source: Optional[Any] = None,
+        logs_catalog: Optional[List[Dict[str, Any]]] = None,
         case_file_repository: Optional[CaseFileRepository] = None,
     ):
         self.alerts = alert_source
         self.incidents = incident_source
         self.metrics = metric_source
         self.traces = trace_source
+        self.splunk = splunk_source
+        self.logs_parquet = logs_parquet_source
         self.correlation_engine = correlation_engine
         self.hypothesis_generator = hypothesis_generator
         self.guardrails = guardrails
         self.metrics_catalog = metrics_catalog
         self.traces_catalog = traces_catalog or []
+        self.logs_catalog = logs_catalog or []
         self.repo = case_file_repository
 
     # ------------------------------------------------------------------
@@ -171,6 +177,32 @@ class InvestigateUseCase:
         start = end - timedelta(hours=1)
         return TimeWindow(start=start.isoformat(), end=end.isoformat(), duration="1h")
 
+    def _time_window_from_timestamp(self, reference_time: str, margin_before_min: int = 30) -> TimeWindow:
+        """Cria time window baseada em um timestamp de referência (opened_at, startsAt)."""
+        try:
+            ref = datetime.fromisoformat(reference_time.replace("Z", "+00:00"))
+            if ref.tzinfo:
+                ref = ref.replace(tzinfo=None)
+        except (ValueError, TypeError):
+            return self._default_time_window()
+
+        start = ref - timedelta(minutes=margin_before_min)
+        end = datetime.utcnow()
+
+        if (end - start) > timedelta(hours=24):
+            start = end - timedelta(hours=6)
+            log.warning(
+                f"[_time_window_from_timestamp] Reference too old ({reference_time}), "
+                f"capping window to last 6h"
+            )
+
+        duration_h = (end - start).total_seconds() / 3600
+        return TimeWindow(
+            start=start.isoformat(),
+            end=end.isoformat(),
+            duration=f"{duration_h:.1f}h",
+        )
+
     async def _determine_scope_and_time_window(
         self, case_file: CaseFile, filters: dict
     ) -> None:
@@ -198,7 +230,14 @@ class InvestigateUseCase:
                     },
                 )
                 case_file.evidence.append(evidence)
-            case_file.timeWindow = self._default_time_window()
+                # Time window dinâmica: usa startsAt do alerta
+                starts_at = alert_labels.get("startsAt") or evidence.result.get("startsAt")
+                if starts_at:
+                    case_file.timeWindow = self._time_window_from_timestamp(starts_at)
+                else:
+                    case_file.timeWindow = self._default_time_window()
+            else:
+                case_file.timeWindow = self._default_time_window()
 
         elif input_data.type == InputType.SYMPTOM:
             service_name = filters.get("application_service")
@@ -210,6 +249,13 @@ class InvestigateUseCase:
                     service_name = "api-gateway"
                 elif "auth" in symptom:
                     service_name = "auth-service"
+
+            if not service_name:
+                log.warning(
+                    f"[_determine_scope_and_time_window] SYMPTOM without application_service — "
+                    f"investigation will be limited (no metrics/traces/incidents correlation). "
+                    f"Consider passing filters.application_service for better results."
+                )
 
             if not environment:
                 symptom = input_data.value.lower()
@@ -257,7 +303,14 @@ class InvestigateUseCase:
                         if val and case_file.scope.additionalLabels is not None:
                             case_file.scope.additionalLabels[label_key] = val
                 case_file.evidence.append(evidence)
-            case_file.timeWindow = self._default_time_window()
+                # Time window dinâmica: usa opened_at do incidente
+                opened_at = result.get("opened_at")
+                if opened_at:
+                    case_file.timeWindow = self._time_window_from_timestamp(opened_at)
+                else:
+                    case_file.timeWindow = self._default_time_window()
+            else:
+                case_file.timeWindow = self._default_time_window()
 
     async def _gather_signals(self, case_file: CaseFile) -> List[Evidence]:
         ci_name = case_file.scope.serviceName
@@ -316,6 +369,32 @@ class InvestigateUseCase:
         if alert_trace_id and self.traces:
             task_names.append("traces:fetch_trace_id_from_alert")
             tasks.append(self.traces.fetch_trace_id_from_alert(alert_trace_id))
+
+        # Splunk error patterns (se tiver service + adapter)
+        if ci_name and self.splunk:
+            task_names.append("splunk:find_error_patterns")
+            tasks.append(
+                self.splunk.find_error_patterns(
+                    application_service=ci_name,
+                    start=case_file.timeWindow.start or "-1h",
+                    end=case_file.timeWindow.end or "now",
+                    top_n=5,
+                )
+            )
+
+        # Logs Parquet error patterns (se tiver service + adapter)
+        if ci_name and self.logs_parquet:
+            task_names.append("logs_parquet:find_error_patterns")
+            bcap = additional.get("business_capability")
+            tasks.append(
+                self.logs_parquet.find_error_patterns(
+                    application_service=ci_name,
+                    start=case_file.timeWindow.start or "",
+                    end=case_file.timeWindow.end or "",
+                    business_capability=bcap,
+                    top_n=5,
+                )
+            )
 
         log.info(f"[_gather_signals] Executing {len(tasks)} parallel tasks: {task_names}")
         results = await asyncio.gather(*tasks, return_exceptions=True)

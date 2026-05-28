@@ -70,6 +70,12 @@ class HypothesisGenerator:
 
     def _infer_root_cause(self, evidences: List[Evidence]) -> str:
         types = [e.type for e in evidences]
+
+        # Tentar extrair causa raiz específica do alertname ou mensagem de erro
+        specific_cause = self._extract_specific_cause(evidences)
+        if specific_cause:
+            return specific_cause
+
         if EvidenceType.METRIC_ANOMALY in types and EvidenceType.LOG_ERROR in types:
             return "Resource saturation or application error causing failures"
         if EvidenceType.TRACE_ERROR in types and EvidenceType.LOG_ERROR in types:
@@ -82,7 +88,58 @@ class HypothesisGenerator:
             return "Metric anomaly detected"
         if EvidenceType.LOG_ERROR in types:
             return "Error pattern detected in logs"
+        if EvidenceType.TRACE_ERROR in types:
+            return "Distributed trace errors detected"
+        if EvidenceType.TRACE_SLOW_SPAN in types:
+            return "Latency degradation detected in traces"
         return "Anomaly detected, requires further investigation"
+
+    def _extract_specific_cause(self, evidences: List[Evidence]) -> Optional[str]:
+        """Tenta extrair causa raiz mais específica a partir do conteúdo das evidências.
+
+        Analisa alertname, __value_string__, mensagens de erro para produzir
+        uma causa raiz contextualizada em vez de genérica.
+        """
+        for e in evidences:
+            if e.type != EvidenceType.ALERT_FIRING:
+                continue
+            result = e.result
+            labels = result.get("labels", {})
+            annotations = result.get("annotations", {})
+
+            alertname = labels.get("alertname", "")
+            value_string = annotations.get("__value_string__", "") or result.get("__value_string__", "")
+
+            if not alertname:
+                continue
+
+            # Padrões comuns de alertname → causa raiz específica
+            alertname_lower = alertname.lower()
+            if "disco" in alertname_lower or "disk" in alertname_lower:
+                return f"Disk saturation: {alertname}" + (f" (current: {value_string})" if value_string else "")
+            if "cpu" in alertname_lower:
+                return f"CPU saturation: {alertname}" + (f" (current: {value_string})" if value_string else "")
+            if "memory" in alertname_lower or "memória" in alertname_lower or "oom" in alertname_lower:
+                return f"Memory pressure: {alertname}" + (f" (current: {value_string})" if value_string else "")
+            if "latency" in alertname_lower or "latência" in alertname_lower or "slow" in alertname_lower:
+                return f"Latency degradation: {alertname}" + (f" (current: {value_string})" if value_string else "")
+            if "error" in alertname_lower or "erro" in alertname_lower or "5xx" in alertname_lower:
+                return f"Error rate increase: {alertname}" + (f" (current: {value_string})" if value_string else "")
+            if "restart" in alertname_lower or "crashloop" in alertname_lower:
+                return f"Pod instability: {alertname}" + (f" (current: {value_string})" if value_string else "")
+            if "connection" in alertname_lower or "timeout" in alertname_lower:
+                return f"Connectivity issue: {alertname}" + (f" (current: {value_string})" if value_string else "")
+            if "replica" in alertname_lower or "unavailable" in alertname_lower:
+                return f"Availability degradation: {alertname}" + (f" (current: {value_string})" if value_string else "")
+            if "span" in alertname_lower or "trace" in alertname_lower:
+                return f"Tracing anomaly: {alertname}" + (f" (current: {value_string})" if value_string else "")
+
+            # Se tem alertname mas não casou nenhum padrão, usar o alertname como causa
+            if value_string:
+                return f"{alertname} (value: {value_string})"
+            return f"Alert triggered: {alertname}"
+
+        return None
 
     def _generate_next_steps(self, component: str, evidences: List[Evidence]) -> List[NextStep]:
         steps: List[NextStep] = []
@@ -128,6 +185,30 @@ class HypothesisGenerator:
                     action="Analisar traces",
                     description=f"Revisar traces distribuídos de {component}",
                     query=f'{{service.name="{component}" && status=error}}',
+                    readOnly=True,
+                    priority=Priority.MEDIUM,
+                )
+            )
+
+        # Traces: sempre sugerir quando há application_service (mesmo sem evidência de trace)
+        if not any(e.type in [EvidenceType.TRACE_ERROR, EvidenceType.TRACE_SLOW_SPAN] for e in evidences):
+            steps.append(
+                NextStep(
+                    action="Investigar traces (latência e erros)",
+                    description=f"Buscar traces com erro ou latência alta de {component} no Tempo",
+                    query=f'{{ resource.service.name = "{component}" && (status = error || duration > 1s) }}',
+                    readOnly=True,
+                    priority=Priority.MEDIUM,
+                )
+            )
+
+        # Logs: sempre sugerir busca de erros em logs (Splunk ou Parquet)
+        if not any(e.type == EvidenceType.LOG_ERROR for e in evidences):
+            steps.append(
+                NextStep(
+                    action="Buscar logs de erro",
+                    description=f"Verificar logs de erro recentes de {component} (Splunk ou S3 Parquet)",
+                    query=f'index=* application_service="{component}" (level=ERROR OR level=error)',
                     readOnly=True,
                     priority=Priority.MEDIUM,
                 )

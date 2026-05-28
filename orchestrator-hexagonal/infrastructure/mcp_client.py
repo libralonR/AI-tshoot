@@ -45,15 +45,87 @@ class MCPClient:
     def _is_mcp_http_endpoint(self) -> bool:
         return self.endpoint.endswith("/mcp") or self.endpoint.endswith("/api/mcp")
 
+    def _is_tempo_native(self) -> bool:
+        """Detecta se Tempo está em modo API nativa (sem wrapper MCP)."""
+        if self.server_name != "tempo":
+            return False
+        return not self._is_mcp_http_endpoint()
+
     def _mcp_http_url(self) -> str:
-        if self.server_name == "tempo":
+        if self.server_name == "tempo" and not self._is_tempo_native():
             return self._tempo_mcp_url()
         if self._is_mcp_http_endpoint():
             return self.endpoint
         return f"{self.endpoint}/mcp"
 
     def _should_use_mcp_jsonrpc_http(self) -> bool:
+        if self._is_tempo_native():
+            return False
         return self.server_name == "tempo" or self._is_mcp_http_endpoint()
+
+    async def _call_tempo_native(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Chama a API REST nativa do Grafana Tempo (sem wrapper MCP)."""
+        base = self.endpoint
+
+        if tool_name == "traceql-search":
+            params = {"q": arguments.get("query", "")}
+            if arguments.get("limit"):
+                params["limit"] = str(arguments["limit"])
+            if arguments.get("start"):
+                params["start"] = str(arguments["start"])
+            if arguments.get("end"):
+                params["end"] = str(arguments["end"])
+            response = await self.client.get(f"{base}/api/search", params=params)
+
+        elif tool_name == "get-trace":
+            trace_id = arguments.get("trace_id", "")
+            response = await self.client.get(f"{base}/api/traces/{trace_id}")
+
+        elif tool_name == "traceql-metrics-instant":
+            params = {"q": arguments.get("query", "")}
+            if arguments.get("time"):
+                params["time"] = str(arguments["time"])
+            response = await self.client.get(f"{base}/api/metrics/query", params=params)
+
+        elif tool_name == "traceql-metrics-range":
+            params = {"q": arguments.get("query", "")}
+            if arguments.get("start"):
+                params["start"] = str(arguments["start"])
+            if arguments.get("end"):
+                params["end"] = str(arguments["end"])
+            if arguments.get("step"):
+                params["step"] = str(arguments["step"])
+            response = await self.client.get(f"{base}/api/metrics/query_range", params=params)
+
+        elif tool_name == "get-attribute-names":
+            params = {}
+            if arguments.get("scope"):
+                params["scope"] = arguments["scope"]
+            response = await self.client.get(f"{base}/api/v2/search/tags", params=params)
+
+        elif tool_name == "get-attribute-values":
+            scope = arguments.get("scope", "span")
+            attr = arguments.get("attribute", "")
+            tag_name = f"{scope}.{attr}" if scope else attr
+            response = await self.client.get(f"{base}/api/v2/search/tag/{tag_name}/values")
+
+        elif tool_name == "docs-traceql":
+            return {
+                "success": True,
+                "result": (
+                    "TraceQL documentation: use { resource.service.name = \"svc\" } for "
+                    "service filtering, { status = error } for errors, { duration > 1s } "
+                    "for slow spans. Combine with && for AND. Aggregations: | count(), "
+                    "| rate(), | quantile_over_time(duration, 0.99). Structural: { a } > { b } "
+                    "(parent-child), { a } >> { b } (ancestor-descendant)."
+                ),
+            }
+        else:
+            return {"success": False, "error": f"Unknown Tempo tool: {tool_name}"}
+
+        response.raise_for_status()
+        data = response.json()
+        return {"success": True, "result": data}
 
     async def _ensure_mcp_session(self):
         if self._mcp_session_id:
@@ -118,7 +190,9 @@ class MCPClient:
         )
 
         try:
-            if self._should_use_mcp_jsonrpc_http():
+            if self._is_tempo_native():
+                result = await self._call_tempo_native(tool_name, arguments)
+            elif self._should_use_mcp_jsonrpc_http():
                 result = await self._call_tool_mcp_jsonrpc_http(tool_name, arguments)
             else:
                 try:

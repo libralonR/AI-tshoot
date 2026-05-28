@@ -212,6 +212,39 @@ class Orchestrator:
         start = end - timedelta(hours=1)
         return TimeWindow(start=start.isoformat(), end=end.isoformat(), duration="1h")
 
+    def _time_window_from_timestamp(self, reference_time: str, margin_before_min: int = 30) -> TimeWindow:
+        """Cria time window baseada em um timestamp de referência (opened_at, startsAt).
+
+        Janela: [reference - margin_before_min, now]
+        Isso garante que capturamos o contexto antes do incidente/alerta começar.
+        """
+        try:
+            # Aceita ISO 8601 com ou sem timezone
+            ref = datetime.fromisoformat(reference_time.replace("Z", "+00:00"))
+            if ref.tzinfo:
+                ref = ref.replace(tzinfo=None)  # normaliza para naive UTC
+        except (ValueError, TypeError):
+            # Se não conseguir parsear, fallback para 1h
+            return self._default_time_window()
+
+        start = ref - timedelta(minutes=margin_before_min)
+        end = datetime.utcnow()
+
+        # Se o incidente é muito antigo (>24h), limitar a janela para não sobrecarregar
+        if (end - start) > timedelta(hours=24):
+            start = end - timedelta(hours=6)
+            log.warning(
+                f"[_time_window_from_timestamp] Reference too old ({reference_time}), "
+                f"capping window to last 6h"
+            )
+
+        duration_h = (end - start).total_seconds() / 3600
+        return TimeWindow(
+            start=start.isoformat(),
+            end=end.isoformat(),
+            duration=f"{duration_h:.1f}h",
+        )
+
     async def _determine_scope_and_time_window(self, case_file: CaseFile, filters: dict = None):
         input_data = case_file.input
         filters = filters or {}
@@ -246,6 +279,11 @@ class Orchestrator:
                         },
                     )
                     case_file.timeWindow = self._default_time_window()
+                    # Tentar usar startsAt do alerta para time window mais precisa
+                    starts_at = alert_labels.get("startsAt") or evidence.result.get("startsAt")
+                    if starts_at:
+                        case_file.timeWindow = self._time_window_from_timestamp(starts_at)
+                        log.info(f"[_determine_scope_and_time_window] Time window from alert startsAt={starts_at}")
                     log.info(f"[_determine_scope_and_time_window] Scope from alert: serviceName={case_file.scope.serviceName}")
                 else:
                     log.warning(f"[_determine_scope_and_time_window] No evidence returned for alert UID: {input_data.value}")
@@ -262,10 +300,15 @@ class Orchestrator:
                 symptom = input_data.value.lower()
                 if "api-gateway" in symptom or "api gateway" in symptom:
                     service_name = "api-gateway"
-                    log.debug(f"[_determine_scope_and_time_window] Extracted service from symptom: api-gateway")
                 elif "auth" in symptom:
                     service_name = "auth-service"
-                    log.debug(f"[_determine_scope_and_time_window] Extracted service from symptom: auth-service")
+
+            if not service_name:
+                log.warning(
+                    f"[_determine_scope_and_time_window] SYMPTOM without application_service — "
+                    f"investigation will be limited (no metrics/traces/incidents correlation). "
+                    f"Consider passing filters.application_service for better results."
+                )
 
             if not environment:
                 symptom = input_data.value.lower()
@@ -336,7 +379,15 @@ class Orchestrator:
                     log.warning(f"[_determine_scope_and_time_window] No evidence returned for incident: {input_data.value}")
             finally:
                 await mcp_client.close()
-            case_file.timeWindow = self._default_time_window()
+            # Time window dinâmica: usa opened_at do incidente como referência
+            opened_at = None
+            if case_file.evidence:
+                opened_at = case_file.evidence[-1].result.get("opened_at")
+            if opened_at:
+                case_file.timeWindow = self._time_window_from_timestamp(opened_at)
+                log.info(f"[_determine_scope_and_time_window] Time window from incident opened_at={opened_at}")
+            else:
+                case_file.timeWindow = self._default_time_window()
 
     async def _gather_signals(self, case_file: CaseFile) -> List[Evidence]:
         import time
@@ -470,6 +521,110 @@ class Orchestrator:
                 log.info(
                     f"[_gather_signals] Queued task: traces:fetch_trace_id_from_alert | "
                     f"trace_id={alert_trace_id}"
+                )
+
+            # Task: Splunk error patterns (se tiver service name + MCP configurado)
+            splunk_cfg = config.mcp_servers.get("splunk")
+            if ci_name and splunk_cfg and splunk_cfg.endpoint:
+                splunk_client = MCPClient("splunk", splunk_cfg.endpoint, splunk_cfg.timeout)
+                task_names.append("splunk:find_error_patterns")
+
+                async def _splunk_errors():
+                    try:
+                        result = await splunk_client.call_tool("errors", {
+                            "application_service": ci_name,
+                            "earliest_time": case_file.timeWindow.start or "-1h",
+                            "latest_time": case_file.timeWindow.end or "now",
+                            "top_n": 5,
+                        })
+                        if result.get("success") and result.get("result"):
+                            import uuid as _uuid
+                            from models import EvidenceType as _ET
+                            return [
+                                Evidence(
+                                    id=str(_uuid.uuid4()),
+                                    type=_ET.LOG_ERROR,
+                                    source="splunk-mcp",
+                                    query=f"errors(application_service={ci_name})",
+                                    result=item,
+                                    timestamp=datetime.utcnow().isoformat(),
+                                    links=[],
+                                    confidence=0.7,
+                                    redacted=False,
+                                )
+                                for item in result["result"][:5]
+                            ]
+                        return []
+                    except Exception as exc:
+                        log.warning(f"[_gather_signals] Splunk errors failed: {exc}")
+                        return []
+                    finally:
+                        await splunk_client.close()
+
+                tasks.append(_splunk_errors())
+                log.info(
+                    f"[_gather_signals] Queued task: splunk:find_error_patterns | "
+                    f"service={ci_name} | endpoint={splunk_cfg.endpoint}"
+                )
+            else:
+                log.info(
+                    f"[_gather_signals] SKIPPED splunk — "
+                    f"service={'set' if ci_name else 'MISSING'} | "
+                    f"splunk_configured={'yes' if splunk_cfg else 'no'}"
+                )
+
+            # Task: Logs Parquet error patterns (se tiver service + capability + MCP configurado)
+            logs_cfg = config.mcp_servers.get("logs")
+            bcap = additional.get("business_capability")
+            if ci_name and logs_cfg and logs_cfg.endpoint:
+                logs_client = MCPClient("logs", logs_cfg.endpoint, logs_cfg.timeout)
+                task_names.append("logs_parquet:find_error_patterns")
+
+                async def _logs_parquet_errors():
+                    try:
+                        args = {
+                            "application_service": ci_name,
+                            "start": case_file.timeWindow.start or "",
+                            "end": case_file.timeWindow.end or "",
+                            "top_n": 5,
+                        }
+                        if bcap:
+                            args["business_capability"] = bcap
+                        result = await logs_client.call_tool("find_error_patterns", args)
+                        if result.get("success") and result.get("result"):
+                            import uuid as _uuid
+                            from models import EvidenceType as _ET
+                            return [
+                                Evidence(
+                                    id=str(_uuid.uuid4()),
+                                    type=_ET.LOG_ERROR,
+                                    source="logs-parquet-mcp",
+                                    query=f"find_error_patterns(service={ci_name})",
+                                    result=item,
+                                    timestamp=datetime.utcnow().isoformat(),
+                                    links=[],
+                                    confidence=0.65,
+                                    redacted=False,
+                                )
+                                for item in result["result"][:5]
+                            ]
+                        return []
+                    except Exception as exc:
+                        log.warning(f"[_gather_signals] Logs Parquet errors failed: {exc}")
+                        return []
+                    finally:
+                        await logs_client.close()
+
+                tasks.append(_logs_parquet_errors())
+                log.info(
+                    f"[_gather_signals] Queued task: logs_parquet:find_error_patterns | "
+                    f"service={ci_name} | capability={bcap} | endpoint={logs_cfg.endpoint}"
+                )
+            else:
+                log.info(
+                    f"[_gather_signals] SKIPPED logs_parquet — "
+                    f"service={'set' if ci_name else 'MISSING'} | "
+                    f"logs_configured={'yes' if logs_cfg else 'no'}"
                 )
 
             log.info(
@@ -661,6 +816,7 @@ async def _execute_tool(tool_name: str, arguments: dict) -> dict:
                 "metric_statistics", "documentation", "prettify_query", "explain_query",
                 "metrics_metadata", "tenants"}
     tempo = {"traceql-search", "traceql-metrics-instant", "traceql-metrics-range", "get-trace", "get-attribute-names", "get-attribute-values", "docs-traceql"}
+    splunk_tools = {"splunk_search", "splunk_errors", "splunk_patterns"}
     
     if tool_name in grafana_tools:
         server_name = "grafana"
@@ -682,6 +838,48 @@ async def _execute_tool(tool_name: str, arguments: dict) -> dict:
         endpoint = config.mcp_servers["tempo"].endpoint
         log.debug(f"[_execute_tool] Routing to Grafana Tempo MCP | endpoint={endpoint}")
         client = MCPClient(server_name, endpoint)
+    elif tool_name in splunk_tools:
+        actual_tool = tool_name.replace("splunk_", "")
+        server_name = "splunk"
+        endpoint = config.mcp_servers["splunk"].endpoint
+        log.debug(f"[_execute_tool] Routing to Splunk MCP | endpoint={endpoint} | actual_tool={actual_tool}")
+        client = MCPClient(server_name, endpoint)
+        try:
+            log.info(f"[_execute_tool] Calling MCP server | server={server_name} | tool={actual_tool}")
+            result = await client.call_tool(actual_tool, arguments)
+            # PII redaction
+            from guardrails import Guardrails
+            result_str, redacted = Guardrails.redact_pii(json.dumps(result, default=str))
+            result = json.loads(result_str)
+            if redacted:
+                PII_REDACTIONS.inc()
+            execution_time = time.time() - start_time
+            MCP_CALL_DURATION.labels(server=server_name, tool=actual_tool, status="success").observe(execution_time)
+            MCP_CALL_TOTAL.labels(server=server_name, tool=actual_tool, status="success").inc()
+            log.info(
+                f"[_execute_tool] Tool execution completed | "
+                f"tool={actual_tool} | "
+                f"server={server_name} | "
+                f"execution_time={execution_time:.3f}s | "
+                f"result_size={len(result_str)} bytes | "
+                f"pii_redacted={redacted}"
+            )
+            return result
+        except Exception as e:
+            execution_time = time.time() - start_time
+            MCP_CALL_DURATION.labels(server=server_name, tool=actual_tool, status="error").observe(execution_time)
+            MCP_CALL_TOTAL.labels(server=server_name, tool=actual_tool, status="error").inc()
+            log.error(
+                f"[_execute_tool] Tool execution failed | "
+                f"tool={actual_tool} | "
+                f"server={server_name} | "
+                f"execution_time={execution_time:.3f}s | "
+                f"error_type={type(e).__name__} | "
+                f"error={str(e)[:200]}"
+            )
+            return {"error": f"Tool execution failed: {str(e)}"}
+        finally:
+            await client.close()
     else:
         log.error(f"[_execute_tool] Unknown tool: {tool_name}")
         return {"error": f"Unknown tool: {tool_name}"}
