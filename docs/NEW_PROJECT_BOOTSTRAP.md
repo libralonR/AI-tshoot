@@ -490,6 +490,109 @@ Retorna o contexto de steering carregado pelo orchestrator (catálogos de querie
 
 ---
 
+## 3.1 Exemplos de `curl` (smoke test rápido)
+
+Defina a base URL uma vez:
+
+```bash
+export OBSERVA_URL="http://localhost:8080"
+# em K8s, por exemplo:
+# export OBSERVA_URL="https://observa-ai.internal.empresa.com"
+```
+
+Health check:
+
+```bash
+curl -fsS "$OBSERVA_URL/health"
+```
+
+Investigar por incidente do ServiceNow:
+
+```bash
+curl -fsS -X POST "$OBSERVA_URL/investigate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_type": "INCIDENT_ID",
+    "value": "INC0012345",
+    "user": "sre-oncall"
+  }'
+```
+
+Investigar por alert UID do Grafana:
+
+```bash
+curl -fsS -X POST "$OBSERVA_URL/investigate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_type": "ALERT_UID",
+    "value": "abcd-1234-efgh-5678",
+    "user": "sre-oncall"
+  }'
+```
+
+Investigar por sintoma livre, com filtros:
+
+```bash
+curl -fsS -X POST "$OBSERVA_URL/investigate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_type": "SYMPTOM",
+    "value": "latência alta no checkout em produção",
+    "user": "sre-oncall",
+    "filters": {
+      "application_service": "checkout-api",
+      "owner_squad": "squad-pagamentos",
+      "severidade": "P1"
+    }
+  }'
+```
+
+Chat — primeira mensagem (sem `session_id`):
+
+```bash
+curl -fsS -X POST "$OBSERVA_URL/chat" \
+  -H "Content-Type: application/json" \
+  -d '{ "message": "Por que o checkout-api está com erro 5xx em produção?" }'
+```
+
+Chat — turno seguinte (reaproveite o `session_id` retornado):
+
+```bash
+curl -fsS -X POST "$OBSERVA_URL/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Mostre as queries PromQL usadas",
+    "session_id": "COLE_AQUI_O_session_id_RETORNADO"
+  }'
+```
+
+Buscar um CaseFile pelo ID:
+
+```bash
+curl -fsS "$OBSERVA_URL/casefile/abc-uuid-123"
+```
+
+Inspecionar o steering carregado pelo orchestrator:
+
+```bash
+curl -fsS "$OBSERVA_URL/steering"
+```
+
+Métricas Prometheus:
+
+```bash
+curl -fsS "$OBSERVA_URL/metrics" | head -50
+```
+
+Dicas:
+
+- Use `| jq` para formatar (`brew install jq`).
+- O `/investigate` pode levar ~30–120s em casos complexos. Adicione `--max-time 120` se quiser limite explícito.
+- Se houver autenticação na frente (ingress, gateway), acrescente `-H "Authorization: Bearer $TOKEN"` ou o header equivalente.
+- Em ambiente com TLS interno sem CA pública, o `--insecure` (`-k`) só pra teste rápido — em produção, use a CA correta.
+
+---
+
 ## 4. Modo `orchestrator+mcp-direct` (opcional)
 
 Só use se houver justificativa clara (ex.: ferramenta interna de exploração que precisa de baixa latência ou de uma tool MCP específica). Os MCPs expõem dois transportes:
