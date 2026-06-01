@@ -26,7 +26,7 @@ conn.execute('INSTALL httpfs'); \
 conn.close(); \
 print('httpfs pre-installed in /app/.duckdb_extensions')"
 
-COPY mcp-servers/logs_parquet.py .
+COPY mcp-servers/logs_parquet/ ./logs_parquet/
 
 RUN useradd -m -u 1000 mcp && chown -R mcp:mcp /app
 USER mcp
@@ -49,4 +49,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"
 
-CMD ["python", "logs_parquet.py"]
+CMD ["python", "-m", "logs_parquet"]

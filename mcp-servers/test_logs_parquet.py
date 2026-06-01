@@ -89,22 +89,32 @@ class LogsParquetTests(unittest.TestCase):
 
         # Importar somente após env e tmpdir prontos
         import logs_parquet
+        from logs_parquet import partitions as _partitions
+        from logs_parquet import tools as _tools
 
         cls.lp = logs_parquet
+        cls._partitions = _partitions
+        cls._tools = _tools
 
-        # Patch do builder para apontar para tmpdir (file://)
-        original_partition_globs = logs_parquet._build_partition_globs
+        # Patch do builder de globs no módulo `partitions` (que é onde
+        # `tools._globs_for_call` chama). Trocamos os prefixos s3:// por
+        # tmpdir local para os testes não dependerem de S3.
+        original_partition_globs = _partitions._build_partition_globs
 
         def patched(bucket, capabilities, hours):
             real = original_partition_globs(bucket, capabilities, hours)
             return [g.replace(f"s3://{bucket}", str(cls.tmpdir)) for g in real]
 
+        _partitions._build_partition_globs = patched
+        # Mantém compat com a API pública também (re-export no __init__).
         logs_parquet._build_partition_globs = patched
 
         # Inicializa singletons e troca creds para fakes (DuckDB sem S3)
-        logs_parquet._ensure_initialized()
-        logs_parquet._creds = _FakeCreds()
-        logs_parquet._pool._creds_applied_at = None
+        _tools._ensure_initialized()
+        _tools._creds = _FakeCreds()
+        _tools._pool._creds_applied_at = None
+        # Atualiza referência também no módulo top-level (re-export)
+        logs_parquet._creds = _tools._creds
 
         # Janela cobrindo as horas 04, 05, 06 UTC (smoke do filter de globs)
         cls.start = "2024-07-23T04:00:00Z"
@@ -113,7 +123,7 @@ class LogsParquetTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         try:
-            cls.lp._pool.close()
+            cls._tools._pool.close()
         except Exception:  # noqa: BLE001
             pass
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
