@@ -197,9 +197,31 @@ class DuckDBPool:
         log.info("[DuckDBPool] opening DuckDB connection (in-memory)")
         conn = duckdb.connect(database=":memory:")
         conn.execute(f"PRAGMA threads={self.cfg.duckdb_threads}")
-        # Carrega extensões: httpfs (S3) e aws (assume role helper).
-        conn.execute("INSTALL httpfs")
-        conn.execute("LOAD httpfs")
+
+        # Usar diretório de extensões customizado se configurado (pré-instalado no Docker build)
+        ext_dir = os.environ.get("DUCKDB_EXTENSION_DIRECTORY")
+        if ext_dir:
+            conn.execute(f"SET extension_directory='{ext_dir}'")
+            log.info(f"[DuckDBPool] extension_directory={ext_dir}")
+
+        # Carrega extensão httpfs. Tenta INSTALL primeiro (para ambientes onde
+        # a extensão não foi pré-instalada no build). Se falhar (HTTP 403,
+        # offline, etc.), tenta apenas LOAD (funciona se já foi instalada
+        # durante o docker build ou em execução anterior).
+        try:
+            conn.execute("INSTALL httpfs")
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                f"[DuckDBPool] INSTALL httpfs failed ({type(exc).__name__}: {str(exc)[:100]}); "
+                f"attempting LOAD only (extension may be pre-installed)"
+            )
+        try:
+            conn.execute("LOAD httpfs")
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                f"[DuckDBPool] LOAD httpfs failed — S3 access will not work. "
+                f"Ensure httpfs is pre-installed in the Docker image. Error: {exc}"
+            )
         return conn
 
     def _apply_credentials(self, conn: duckdb.DuckDBPyConnection) -> None:

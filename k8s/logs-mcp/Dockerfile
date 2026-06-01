@@ -14,10 +14,25 @@ RUN apt-get update \
 COPY k8s/logs-mcp/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pré-instalar extensão httpfs do DuckDB durante o build.
+# Isso evita que o container precise baixar em runtime (onde pode dar 403
+# por rate limit, network policy, ou falta de egress).
+# Instalamos em /app/.duckdb_extensions/ que será acessível pelo user mcp.
+RUN python -c "\
+import duckdb; \
+conn = duckdb.connect(); \
+conn.execute(\"SET extension_directory='/app/.duckdb_extensions'\"); \
+conn.execute('INSTALL httpfs'); \
+conn.close(); \
+print('httpfs pre-installed in /app/.duckdb_extensions')"
+
 COPY mcp-servers/logs_parquet.py .
 
 RUN useradd -m -u 1000 mcp && chown -R mcp:mcp /app
 USER mcp
+
+# Apontar DuckDB para o diretório de extensões pré-instalado
+ENV DUCKDB_EXTENSION_DIRECTORY=/app/.duckdb_extensions
 
 # Modo padrão: sse (REST + SSE para integração com orchestrator)
 ENV MCP_SERVER_MODE=sse \
